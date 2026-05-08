@@ -1,5 +1,34 @@
-.globe-container {
-  width: 100vw;
+/* Globe.css */
+
+.globe-wrapper {
+  position: relative;
+  width: 100%;
   height: 100vh;
-  background: #0b0b19;
+  background: #000;
+  overflow: hidden;
+  font-family: "Orbitron", "Courier New", monospace;
+}
+
+/* The three-globe canvas fills the container */
+.globe-mount {
+  width: 100%;
+  height: 100%;
+}
+
+.globe-mount canvas {
+  display: block;
+}
+
+/* Optional: scanline vignette for cinematic feel */
+.globe-wrapper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 55%,
+    rgba(0, 0, 0, 0.6) 100%
+  );
+  pointer-events: none;
+  z-index: 5;
 }
