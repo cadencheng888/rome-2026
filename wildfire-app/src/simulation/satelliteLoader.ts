@@ -1,4 +1,4 @@
-import type { Cell, Grid } from './fireEngine';
+import type { Cell, Grid } from "./fireEngine";
 
 /**
  * Loads an NDVI-colorized PNG (Sentinel Hub visualization output) and
@@ -80,24 +80,20 @@ export function gridFromImageData(
       const burnablePixels = validPixels - waterPixels;
 
       let fuel: number;
-      let status: Cell['status'];
+      let status: Cell["status"];
 
       if (validRatio < 0.25) {
         fuel = 0;
-        status = 'firebreak';
+        status = "firebreak";
       } else if (waterRatio > 0.5) {
         fuel = 0;
-        status = 'firebreak';
+        status = "firebreak";
       } else {
         fuel = burnablePixels > 0 ? fuelSum / burnablePixels : 0;
-        status = fuel < 5 ? 'firebreak' : 'unburned';
+        status = fuel < 5 ? "firebreak" : "unburned";
       }
 
-<<<<<<< Updated upstream
-      row.push({ fuel, status, heat: 0 });
-=======
       row.push({ fuel, moisture: 0, status, heat: 0 });
->>>>>>> Stashed changes
     }
     grid.push(row);
   }
@@ -108,7 +104,7 @@ export function gridFromImageData(
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
     img.src = url;
@@ -117,11 +113,11 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 
 async function loadImageData(url: string): Promise<ImageData> {
   const img = await loadImage(url);
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = img.width;
   canvas.height = img.height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Could not get 2D canvas context');
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not get 2D canvas context");
   ctx.drawImage(img, 0, 0);
   return ctx.getImageData(0, 0, img.width, img.height);
 }
@@ -183,7 +179,10 @@ export function elevationFromImageData(
  * Generates a synthetic elevation grid using simple noise — used for the
  * RANDOM FOREST mode where there's no satellite image to derive heights from.
  */
-export function syntheticElevationMap(gridW: number, gridH: number): number[][] {
+export function syntheticElevationMap(
+  gridW: number,
+  gridH: number
+): number[][] {
   const result: number[][] = [];
   for (let y = 0; y < gridH; y++) {
     const row: number[] = [];
@@ -199,8 +198,6 @@ export function syntheticElevationMap(gridW: number, gridH: number): number[][] 
   return result;
 }
 
-<<<<<<< Updated upstream
-=======
 /**
  * Builds a fire-engine Grid directly from raw 7-band GeoTIFF arrays.
  * Fuel is derived from NLCD land-cover class scaled by NDVI density.
@@ -227,7 +224,11 @@ export function gridFromBands(
       const x1 = Math.min(pixelW, Math.floor((gx + 1) * blockW));
       const y1 = Math.min(pixelH, Math.floor((gy + 1) * blockH));
 
-      let ndviSum = 0, ndmiSum = 0, lcSum = 0, count = 0, waterCount = 0;
+      let ndviSum = 0,
+        ndmiSum = 0,
+        lcSum = 0,
+        count = 0,
+        waterCount = 0;
 
       for (let py = y0; py < y1; py++) {
         for (let px = x0; px < x1; px++) {
@@ -245,7 +246,7 @@ export function gridFromBands(
       }
 
       if (count === 0) {
-        row.push({ fuel: 0, moisture: 0, status: 'firebreak', heat: 0 });
+        row.push({ fuel: 0, moisture: 0, status: "firebreak", heat: 0 });
         continue;
       }
 
@@ -263,7 +264,8 @@ export function gridFromBands(
       const moisture = Math.max(0, Math.min(1, (avgNdmi + 1) / 2));
 
       const isWaterCell = waterRatio > 0.5 || avgLc === 11;
-      const status: Cell['status'] = isWaterCell || fuel < 5 ? 'firebreak' : 'unburned';
+      const status: Cell["status"] =
+        isWaterCell || fuel < 5 ? "firebreak" : "unburned";
 
       row.push({ fuel: isWaterCell ? 0 : fuel, moisture, status, heat: 0 });
     }
@@ -276,52 +278,55 @@ export function gridFromBands(
 // Crown-fire fuels (evergreen/deciduous forest) score highest; developed and water score 0.
 function landCoverToFuel(nlcdClass: number): number {
   switch (nlcdClass) {
-    case 11: return 0;   // Open Water
-    case 21: return 5;   // Developed, Open Space
-    case 22: return 3;   // Developed, Low Intensity
-    case 23: return 2;   // Developed, Medium Intensity
-    case 24: return 0;   // Developed, High Intensity
-    case 31: return 10;  // Barren Land
-    case 41: return 75;  // Deciduous Forest
-    case 42: return 85;  // Evergreen Forest (high resin = crown fire risk)
-    case 43: return 80;  // Mixed Forest
-    case 52: return 65;  // Shrub/Scrub (fast spread)
-    case 71: return 50;  // Herbaceous/Grassland (fastest spread, high cure rate)
-    case 81: return 40;  // Hay/Pasture
-    case 82: return 30;  // Cultivated Crops
-    case 90: return 20;  // Woody Wetlands
-    case 95: return 15;  // Emergent Herbaceous Wetlands
-    default: return 40;  // Unknown → moderate
+    case 11:
+      return 0; // Open Water
+    case 21:
+      return 5; // Developed, Open Space
+    case 22:
+      return 3; // Developed, Low Intensity
+    case 23:
+      return 2; // Developed, Medium Intensity
+    case 24:
+      return 0; // Developed, High Intensity
+    case 31:
+      return 10; // Barren Land
+    case 41:
+      return 75; // Deciduous Forest
+    case 42:
+      return 85; // Evergreen Forest (high resin = crown fire risk)
+    case 43:
+      return 80; // Mixed Forest
+    case 52:
+      return 65; // Shrub/Scrub (fast spread)
+    case 71:
+      return 50; // Herbaceous/Grassland (fastest spread, high cure rate)
+    case 81:
+      return 40; // Hay/Pasture
+    case 82:
+      return 30; // Cultivated Crops
+    case 90:
+      return 20; // Woody Wetlands
+    case 95:
+      return 15; // Emergent Herbaceous Wetlands
+    default:
+      return 40; // Unknown → moderate
   }
 }
 
->>>>>>> Stashed changes
 function isWater(r: number, g: number, b: number): boolean {
   return b > r + 25 && b > g + 25 && b > 80;
 }
 
 /**
-<<<<<<< Updated upstream
- * Maps an NDVI palette color to a fuel value 0-100. The fire-risk palette
- * (see NDVI_RAMP in tiffLoader.ts / scripts/tiff_to_png.py) goes
- * green → yellow → orange → red as NDVI rises, so projecting the color onto
- * the red-green axis recovers the underlying fuel: red dominance → forest /
- * high fuel, green dominance → bare / low fuel.
-=======
  * Maps a natural-satellite palette color to a fuel value 0-100.
  * The palette (see NDVI_RAMP in tiffLoader.ts) uses green = dense forest =
  * high fuel, tan/brown = bare soil = low fuel.  Green dominance → high fuel.
->>>>>>> Stashed changes
  */
 function colorToFuel(r: number, g: number, b: number): number {
   if (r > 235 && g > 235 && b > 235) return 8;
   if (r < 8 && g < 8 && b < 8) return 5;
 
   const denom = Math.max(r + g, 1);
-<<<<<<< Updated upstream
-  const axis = (r - g) / denom; // ~ -1 (pure green) … +1 (pure red)
-=======
   const axis = (g - r) / denom; // ~ -1 (tan/red) … +1 (green forest)
->>>>>>> Stashed changes
   return Math.max(5, Math.min(100, 50 + axis * 80));
 }

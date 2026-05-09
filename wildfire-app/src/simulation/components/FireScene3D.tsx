@@ -1,8 +1,8 @@
-import { Canvas, useFrame, useLoader } from '@react-three/fiber';
-import { OrbitControls, Sky, Stars, useTexture } from '@react-three/drei';
-import { Suspense, useEffect, useMemo, useRef } from 'react';
-import * as THREE from 'three';
-import type { Grid } from '../fireEngine';
+import { Canvas, useFrame, useLoader } from "@react-three/fiber";
+import { OrbitControls, Sky, Stars, useTexture } from "@react-three/drei";
+import { Suspense, useEffect, useMemo, useRef } from "react";
+import * as THREE from "three";
+import type { Grid } from "../fireEngine";
 
 interface Props {
   grid: Grid;
@@ -36,7 +36,12 @@ export function FireScene3D({
     <Canvas
       shadows
       camera={{ position: [0, 80, 140], fov: 45, near: 1, far: 2000 }}
-      style={{ width: '100%', height: '100%', background: 'radial-gradient(ellipse at 50% 70%, #1a2942 0%, #0a1020 55%, #03060d 100%)' }}
+      style={{
+        width: "100%",
+        height: "100%",
+        background:
+          "radial-gradient(ellipse at 50% 70%, #1a2942 0%, #0a1020 55%, #03060d 100%)",
+      }}
     >
       <Suspense fallback={null}>
         <Lights />
@@ -49,11 +54,21 @@ export function FireScene3D({
           turbidity={8}
           rayleigh={2.5}
         />
-        <Stars radius={900} depth={120} count={1800} factor={3.5} saturation={0} fade speed={0.4} />
+        <Stars
+          radius={900}
+          depth={120}
+          count={1800}
+          factor={3.5}
+          saturation={0}
+          fade
+          speed={0.4}
+        />
         <HorizonHaze />
-        <fog attach="fog" args={['#1a2334', 320, 900]} />
+        <fog attach="fog" args={["#1a2334", 320, 900]} />
 
-        <GridFloor planeH={(PLANE_SIZE * grid.length) / (grid[0]?.length ?? 1)} />
+        <GridFloor
+          planeH={(PLANE_SIZE * grid.length) / (grid[0]?.length ?? 1)}
+        />
         <Water planeH={(PLANE_SIZE * grid.length) / (grid[0]?.length ?? 1)} />
         <Terrain
           grid={grid}
@@ -64,7 +79,13 @@ export function FireScene3D({
           useDisplacement={useDisplacement}
         />
         <Fire grid={grid} elevation={smoothed} />
-        <Smoke grid={grid} elevation={smoothed} windDirX={windDirX} windDirY={windDirY} windSpeed={windSpeed} />
+        <Smoke
+          grid={grid}
+          elevation={smoothed}
+          windDirX={windDirX}
+          windDirY={windDirY}
+          windSpeed={windSpeed}
+        />
         <Trees grid={grid} elevation={smoothed} sceneKey={sceneKey} />
 
         <OrbitControls
@@ -95,7 +116,12 @@ function smoothElevation(input: number[][], passes: number): number[][] {
             const nx = x + dx;
             const ny = y + dy;
             if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-            const weight = dx === 0 && dy === 0 ? 4 : Math.abs(dx) + Math.abs(dy) === 1 ? 2 : 1;
+            const weight =
+              dx === 0 && dy === 0
+                ? 4
+                : Math.abs(dx) + Math.abs(dy) === 1
+                ? 2
+                : 1;
             sum += current[ny][nx] * weight;
             n += weight;
           }
@@ -118,14 +144,16 @@ function elevationAt(elevation: number[][], gx: number, gy: number): number {
   return elevation[y][x] * ELEVATION_SCALE;
 }
 
-function buildElevationTexture(elevation: number[][]): THREE.CanvasTexture | null {
+function buildElevationTexture(
+  elevation: number[][]
+): THREE.CanvasTexture | null {
   if (!elevation.length) return null;
   const h = elevation.length;
   const w = elevation[0].length;
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   const img = ctx.createImageData(w, h);
   for (let y = 0; y < h; y++) {
@@ -165,7 +193,7 @@ function Lights() {
         shadow-camera-top={150}
         shadow-camera-bottom={-150}
       />
-      <hemisphereLight args={['#aac9ff', '#3a2e22', 0.55]} />
+      <hemisphereLight args={["#aac9ff", "#3a2e22", 0.55]} />
     </>
   );
 }
@@ -183,12 +211,23 @@ function GridFloor({ planeH }: { planeH: number }) {
       {/* Soft radial glow under the terrain */}
       <mesh rotation-x={-Math.PI / 2} position={[0, 0.02, 0]}>
         <circleGeometry args={[Math.max(PLANE_SIZE, planeH) * 0.9, 64]} />
-        <meshBasicMaterial color="#1a3358" transparent opacity={0.55} depthWrite={false} />
+        <meshBasicMaterial
+          color="#1a3358"
+          transparent
+          opacity={0.55}
+          depthWrite={false}
+        />
       </mesh>
       {/* Bright primary grid */}
-      <gridHelper args={[size, divisions, '#3a6fb0', '#1a2c4a']} position={[0, 0.03, 0]} />
+      <gridHelper
+        args={[size, divisions, "#3a6fb0", "#1a2c4a"]}
+        position={[0, 0.03, 0]}
+      />
       {/* Wider accent grid every 5 cells for a "data tile" feel */}
-      <gridHelper args={[size, divisions / 5, '#5d9bd6', '#2a4674']} position={[0, 0.04, 0]} />
+      <gridHelper
+        args={[size, divisions / 5, "#5d9bd6", "#2a4674"]}
+        position={[0, 0.04, 0]}
+      />
     </group>
   );
 }
@@ -232,18 +271,13 @@ function HorizonHaze() {
 
 function Water({ planeH }: { planeH: number }) {
   return (
-    <mesh rotation-x={-Math.PI / 2} position={[0, WATER_LEVEL, 0]} receiveShadow>
+    <mesh
+      rotation-x={-Math.PI / 2}
+      position={[0, WATER_LEVEL, 0]}
+      receiveShadow
+    >
       <planeGeometry args={[PLANE_SIZE, planeH]} />
       <meshStandardMaterial
-<<<<<<< Updated upstream
-        color="#2b4664"
-        transparent
-        opacity={0.6}
-        roughness={0.15}
-        metalness={0.55}
-        emissive="#0e1c2a"
-        emissiveIntensity={0.1}
-=======
         color="#1a6aaa"
         transparent
         opacity={0.65}
@@ -251,7 +285,6 @@ function Water({ planeH }: { planeH: number }) {
         metalness={0.4}
         emissive="#0a3060"
         emissiveIntensity={0.15}
->>>>>>> Stashed changes
       />
     </mesh>
   );
@@ -284,7 +317,10 @@ function Terrain({
   const planeH = (PLANE_SIZE * h) / w;
 
   // GPU and JS sample the SAME smoothed array → tree feet line up with terrain.
-  const displacementTexture = useMemo(() => buildElevationTexture(elevation), [elevation]);
+  const displacementTexture = useMemo(
+    () => buildElevationTexture(elevation),
+    [elevation]
+  );
 
   const burnOverlay = useBurnOverlay(grid);
 
@@ -305,10 +341,14 @@ function Terrain({
           void y;
         }}
       >
-        <planeGeometry args={[PLANE_SIZE, planeH, TERRAIN_SEGMENTS_X, TERRAIN_SEGMENTS_Y]} />
+        <planeGeometry
+          args={[PLANE_SIZE, planeH, TERRAIN_SEGMENTS_X, TERRAIN_SEGMENTS_Y]}
+        />
         <meshStandardMaterial
           map={texture}
-          displacementMap={useDisplacement && displacementTexture ? displacementTexture : null}
+          displacementMap={
+            useDisplacement && displacementTexture ? displacementTexture : null
+          }
           displacementScale={useDisplacement ? ELEVATION_SCALE : 0}
           roughness={0.92}
           metalness={0.0}
@@ -317,7 +357,9 @@ function Terrain({
 
       {burnOverlay && (
         <mesh rotation-x={-Math.PI / 2} position={[0, 0.15, 0]}>
-          <planeGeometry args={[PLANE_SIZE, planeH, TERRAIN_SEGMENTS_X, TERRAIN_SEGMENTS_Y]} />
+          <planeGeometry
+            args={[PLANE_SIZE, planeH, TERRAIN_SEGMENTS_X, TERRAIN_SEGMENTS_Y]}
+          />
           <meshBasicMaterial
             map={burnOverlay}
             transparent
@@ -335,7 +377,7 @@ function useBurnOverlay(grid: Grid): THREE.Texture | null {
     const w = grid[0]?.length ?? 0;
     const h = grid.length;
     if (!w || !h) return null;
-    const canvas = document.createElement('canvas');
+    const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
     const tex = new THREE.CanvasTexture(canvas);
@@ -345,8 +387,8 @@ function useBurnOverlay(grid: Grid): THREE.Texture | null {
   }, [grid.length, grid[0]?.length]);
 
   if (!texture) return null;
-  const canvas = (texture.image as HTMLCanvasElement);
-  const ctx = canvas.getContext('2d');
+  const canvas = texture.image as HTMLCanvasElement;
+  const ctx = canvas.getContext("2d");
   if (!ctx) return texture;
   const w = grid[0].length;
   const h = grid.length;
@@ -354,11 +396,11 @@ function useBurnOverlay(grid: Grid): THREE.Texture | null {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const cell = grid[y][x];
-      if (cell.status === 'burned') {
-        ctx.fillStyle = 'rgba(20, 12, 8, 0.92)';
+      if (cell.status === "burned") {
+        ctx.fillStyle = "rgba(20, 12, 8, 0.92)";
         ctx.fillRect(x, y, 1, 1);
-      } else if (cell.status === 'firebreak') {
-        ctx.fillStyle = 'rgba(40, 36, 32, 0.45)';
+      } else if (cell.status === "firebreak") {
+        ctx.fillStyle = "rgba(40, 36, 32, 0.45)";
         ctx.fillRect(x, y, 1, 1);
       }
     }
@@ -369,8 +411,9 @@ function useBurnOverlay(grid: Grid): THREE.Texture | null {
 
 function gridToWorld(gx: number, gy: number, gridW: number, gridH: number) {
   const planeH = (PLANE_SIZE * gridH) / gridW;
-  const wx = (gx / gridW) * PLANE_SIZE - PLANE_SIZE / 2 + (PLANE_SIZE / gridW) / 2;
-  const wz = (gy / gridH) * planeH - planeH / 2 + (planeH / gridH) / 2;
+  const wx =
+    (gx / gridW) * PLANE_SIZE - PLANE_SIZE / 2 + PLANE_SIZE / gridW / 2;
+  const wz = (gy / gridH) * planeH - planeH / 2 + planeH / gridH / 2;
   return [wx, wz] as const;
 }
 
@@ -383,7 +426,7 @@ function Fire({ grid, elevation }: { grid: Grid; elevation: number[][] }) {
     const arr: Array<{ x: number; y: number; heat: number }> = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        if (grid[y][x].status === 'burning') {
+        if (grid[y][x].status === "burning") {
           arr.push({ x, y, heat: grid[y][x].heat });
         }
       }
@@ -404,7 +447,10 @@ function Fire({ grid, elevation }: { grid: Grid; elevation: number[][] }) {
       const { x, y, heat } = burningCells[i];
       const [wx, wz] = gridToWorld(x, y, w, h);
       const groundY = elevationAt(elevation, x, y);
-      const flicker = 0.5 + Math.sin(t * 18 + i * 1.3) * 0.25 + Math.cos(t * 11 + i * 0.7) * 0.15;
+      const flicker =
+        0.5 +
+        Math.sin(t * 18 + i * 1.3) * 0.25 +
+        Math.cos(t * 11 + i * 0.7) * 0.15;
       const baseHeight = 1.5 + heat * 5;
       const height = baseHeight * (0.9 + flicker * 0.5);
       dummy.position.set(wx, groundY + height / 2, wz);
@@ -431,7 +477,11 @@ function Fire({ grid, elevation }: { grid: Grid; elevation: number[][] }) {
 
   return (
     <group>
-      <instancedMesh ref={meshRef} args={[undefined, undefined, maxFlames]} frustumCulled={false}>
+      <instancedMesh
+        ref={meshRef}
+        args={[undefined, undefined, maxFlames]}
+        frustumCulled={false}
+      >
         <coneGeometry args={[0.9, 1, 7, 1, true]} />
         <meshBasicMaterial
           color="#ffb040"
@@ -469,7 +519,7 @@ function Smoke({
     const seeds = new Float32Array(MAX);
     for (let i = 0; i < MAX; i++) ages[i] = Math.random() * 5;
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     return { geometry: geo, attrs: { positions, ages, seeds } };
   }, []);
 
@@ -477,7 +527,7 @@ function Smoke({
     const arr: Array<{ x: number; y: number }> = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        if (grid[y][x].status === 'burning') arr.push({ x, y });
+        if (grid[y][x].status === "burning") arr.push({ x, y });
       }
     }
     return arr;
@@ -511,9 +561,11 @@ function Smoke({
         ages[i] = 0;
         seeds[i] = Math.random();
       } else {
-        positions[i * 3] += driftX + Math.sin(ages[i] * 2 + seeds[i] * 10) * 0.05;
+        positions[i * 3] +=
+          driftX + Math.sin(ages[i] * 2 + seeds[i] * 10) * 0.05;
         positions[i * 3 + 1] += delta * (3.5 + seeds[i] * 1.5);
-        positions[i * 3 + 2] += driftZ + Math.cos(ages[i] * 2 + seeds[i] * 10) * 0.05;
+        positions[i * 3 + 2] +=
+          driftZ + Math.cos(ages[i] * 2 + seeds[i] * 10) * 0.05;
       }
     }
     geometry.attributes.position.needsUpdate = true;
@@ -533,7 +585,7 @@ function Smoke({
   );
 }
 
-type TreeKind = 'conifer' | 'broadleaf';
+type TreeKind = "conifer" | "broadleaf";
 
 interface TreePlace {
   x: number;
@@ -559,7 +611,7 @@ function Trees({
   const w = grid[0]?.length ?? 0;
   const h = grid.length;
   const initialGridRef = useRef<Grid | null>(null);
-  const lastKeyRef = useRef<string>('');
+  const lastKeyRef = useRef<string>("");
 
   if (lastKeyRef.current !== sceneKey || initialGridRef.current === null) {
     initialGridRef.current = grid;
@@ -578,12 +630,13 @@ function Trees({
       for (let x = 0; x < w; x++) {
         const cell = snapshot[y]?.[x];
         if (!cell) continue;
-        if (cell.fuel > 55 && cell.status !== 'firebreak') {
+        if (cell.fuel > 55 && cell.status !== "firebreak") {
           if (rand() < 0.45) {
             // Cell elevation determines mix: high = mostly conifer, low = mostly broadleaf
-            const elevFrac = Math.min(1, (elevation[y]?.[x] ?? 0));
+            const elevFrac = Math.min(1, elevation[y]?.[x] ?? 0);
             const coniferChance = 0.35 + elevFrac * 0.5;
-            const kind: TreeKind = rand() < coniferChance ? 'conifer' : 'broadleaf';
+            const kind: TreeKind =
+              rand() < coniferChance ? "conifer" : "broadleaf";
             arr.push({
               x,
               y,
@@ -620,15 +673,15 @@ function Trees({
 
     for (let i = 0; i < treeCells.length; i++) {
       const t = treeCells[i];
-      if (t.kind === 'conifer' && coneIdx >= MAX_PER_KIND) continue;
-      if (t.kind === 'broadleaf' && ballIdx >= MAX_PER_KIND) continue;
+      if (t.kind === "conifer" && coneIdx >= MAX_PER_KIND) continue;
+      if (t.kind === "broadleaf" && ballIdx >= MAX_PER_KIND) continue;
       if (trunkIdx >= trunkMax) break;
 
       const [wx, wz] = gridToWorld(t.x, t.y, w, h);
       const groundY = elevationAt(elevation, t.x, t.y);
       const x = wx + t.offsetX;
       const z = wz + t.offsetZ;
-      const trunkH = (t.kind === 'conifer' ? 1.6 : 1.3) * t.scale;
+      const trunkH = (t.kind === "conifer" ? 1.6 : 1.3) * t.scale;
       const leanX = Math.sin(x * 1.7 + z * 0.9) * 0.04;
       const leanZ = Math.cos(x * 1.1 - z * 1.4) * 0.04;
 
@@ -647,11 +700,15 @@ function Trees({
       const light = 0.18 + (1 - elevFactor) * 0.18 + ((i * 13) % 4) * 0.015;
       const color = new THREE.Color().setHSL(hue, sat, light);
 
-      if (t.kind === 'conifer') {
+      if (t.kind === "conifer") {
         // Tall, pointy cone canopy
         const canopyH = 3.4 * t.scale;
         const canopyR = 1.0 * t.scale;
-        dummy.position.set(x + leanX * 1.2, groundY + trunkH + canopyH / 2, z + leanZ * 1.2);
+        dummy.position.set(
+          x + leanX * 1.2,
+          groundY + trunkH + canopyH / 2,
+          z + leanZ * 1.2
+        );
         dummy.scale.set(canopyR, canopyH, canopyR);
         dummy.rotation.set(leanX, (i * 0.37) % (Math.PI * 2), leanZ);
         dummy.updateMatrix();
@@ -662,7 +719,11 @@ function Trees({
         // Rounded faceted canopy
         const canopyR = 1.5 * t.scale;
         const stretch = 0.85 + ((i * 7) % 5) * 0.06;
-        dummy.position.set(x + leanX * 0.8, groundY + trunkH + canopyR * 0.55, z + leanZ * 0.8);
+        dummy.position.set(
+          x + leanX * 0.8,
+          groundY + trunkH + canopyR * 0.55,
+          z + leanZ * 0.8
+        );
         dummy.scale.set(canopyR, canopyR * stretch, canopyR);
         dummy.rotation.set(leanX, (i * 0.37) % (Math.PI * 2), leanZ);
         dummy.updateMatrix();
@@ -673,9 +734,12 @@ function Trees({
     }
 
     // Hide unused slots
-    for (let i = coneIdx; i < MAX_PER_KIND; i++) coneMesh.setMatrixAt(i, hidden.matrix);
-    for (let i = ballIdx; i < MAX_PER_KIND; i++) ballMesh.setMatrixAt(i, hidden.matrix);
-    for (let i = trunkIdx; i < trunkMax; i++) trunkMesh.setMatrixAt(i, hidden.matrix);
+    for (let i = coneIdx; i < MAX_PER_KIND; i++)
+      coneMesh.setMatrixAt(i, hidden.matrix);
+    for (let i = ballIdx; i < MAX_PER_KIND; i++)
+      ballMesh.setMatrixAt(i, hidden.matrix);
+    for (let i = trunkIdx; i < trunkMax; i++)
+      trunkMesh.setMatrixAt(i, hidden.matrix);
 
     trunkMesh.instanceMatrix.needsUpdate = true;
     coneMesh.instanceMatrix.needsUpdate = true;
@@ -689,15 +753,27 @@ function Trees({
 
   return (
     <group>
-      <instancedMesh ref={trunkRef} args={[undefined, undefined, MAX_PER_KIND * 2]} castShadow>
+      <instancedMesh
+        ref={trunkRef}
+        args={[undefined, undefined, MAX_PER_KIND * 2]}
+        castShadow
+      >
         <cylinderGeometry args={[1, 1.1, 1, 6]} />
         <meshStandardMaterial color="#3a2a1f" roughness={0.95} />
       </instancedMesh>
-      <instancedMesh ref={coneLeavesRef} args={[undefined, undefined, MAX_PER_KIND]} castShadow>
+      <instancedMesh
+        ref={coneLeavesRef}
+        args={[undefined, undefined, MAX_PER_KIND]}
+        castShadow
+      >
         <coneGeometry args={[1, 1, 8]} />
         <meshStandardMaterial color="#2d5a2a" roughness={0.85} />
       </instancedMesh>
-      <instancedMesh ref={ballLeavesRef} args={[undefined, undefined, MAX_PER_KIND]} castShadow>
+      <instancedMesh
+        ref={ballLeavesRef}
+        args={[undefined, undefined, MAX_PER_KIND]}
+        castShadow
+      >
         <icosahedronGeometry args={[1, 1]} />
         <meshStandardMaterial color="#3a7036" roughness={0.78} flatShading />
       </instancedMesh>
