@@ -57,7 +57,6 @@ export function RiskGauge({ score, previousScore }: Props) {
           stroke="#f85149"
           strokeWidth={strokeWidth}
           fill="none"
-          strokeLinecap="butt"
         />
 
         <line

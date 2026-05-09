@@ -1,8 +1,7 @@
-export type CellStatus = "unburned" | "burning" | "burned" | "firebreak";
+export type CellStatus = 'unburned' | 'burning' | 'burned' | 'firebreak';
 
 export interface Cell {
   fuel: number;
-  moisture: number; // 0 = dry (ignites easily), 1 = wet (resists fire) — driven by NDMI band
   status: CellStatus;
   heat: number;
 }
@@ -34,8 +33,7 @@ export function createGrid(opts: GridOptions): Grid {
       const hasFuel = !isBreak && Math.random() < fuelDensity;
       row.push({
         fuel: hasFuel ? 60 + Math.random() * 40 : 0,
-        moisture: 0,
-        status: isBreak ? "firebreak" : "unburned",
+        status: isBreak ? 'firebreak' : 'unburned',
         heat: 0,
       });
     }
@@ -51,29 +49,20 @@ export function cloneGrid(grid: Grid): Grid {
 export function ignite(grid: Grid, x: number, y: number): Grid {
   if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) return grid;
   const next = cloneGrid(grid);
-  if (next[y][x].status === "unburned" && next[y][x].fuel > 0) {
-    next[y][x].status = "burning";
+  if (next[y][x].status === 'unburned' && next[y][x].fuel > 0) {
+    next[y][x].status = 'burning';
     next[y][x].heat = 1;
   }
   return next;
 }
 
 const NEIGHBORS: Array<[number, number]> = [
-  [-1, -1],
-  [0, -1],
-  [1, -1],
-  [-1, 0],
-  [1, 0],
-  [-1, 1],
-  [0, 1],
-  [1, 1],
+  [-1, -1], [0, -1], [1, -1],
+  [-1, 0],           [1, 0],
+  [-1, 1],  [0, 1],  [1, 1],
 ];
 
-export function step(
-  grid: Grid,
-  params: SimParams,
-  elevation?: number[][] | null
-): Grid {
+export function step(grid: Grid, params: SimParams): Grid {
   const next = cloneGrid(grid);
   const h = grid.length;
   const w = grid[0].length;
@@ -84,14 +73,14 @@ export function step(
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const cell = grid[y][x];
-      if (cell.status !== "burning") continue;
+      if (cell.status !== 'burning') continue;
 
-      const consume = 0.05 + cell.heat * 0.03;
+      const consume = 0.05 + (cell.heat * 0.03);
       next[y][x].fuel = Math.max(0, cell.fuel - consume * 100);
       next[y][x].heat = Math.max(0, cell.heat - 0.04);
 
       if (next[y][x].fuel <= 0 || next[y][x].heat <= 0) {
-        next[y][x].status = "burned";
+        next[y][x].status = 'burned';
         next[y][x].heat = 0;
       }
 
@@ -101,30 +90,18 @@ export function step(
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
 
         const neighbor = grid[ny][nx];
-        if (neighbor.status !== "unburned" || neighbor.fuel <= 0) continue;
+        if (neighbor.status !== 'unburned' || neighbor.fuel <= 0) continue;
 
-        const windAlignment = dx * params.windDirX + dy * params.windDirY;
+        const windAlignment =
+          dx * params.windDirX + dy * params.windDirY;
         const windBoost = Math.max(0, windAlignment) * (params.windSpeed / 30);
-
-        // Uphill spread is faster; downhill is slower.
-        let elevBoost = 1.0;
-        if (elevation) {
-          const dElev = (elevation[ny]?.[nx] ?? 0) - (elevation[y]?.[x] ?? 0);
-          elevBoost =
-            dElev > 0
-              ? 1 + dElev * 5 // uphill: significant boost
-              : Math.max(0.4, 1 + dElev * 1.5); // downhill: moderate penalty
-        }
-
-        // Wet cells (high NDMI) resist ignition.
-        const dryness = 1 - neighbor.moisture * 0.75;
 
         const fuelFactor = neighbor.fuel / 100;
         const baseProb = 0.08 * fuelFactor * tempFactor * humidityFactor;
-        const prob = baseProb * (1 + windBoost * 2.0) * elevBoost * dryness;
+        const prob = baseProb * (1 + windBoost * 2.0);
 
         if (Math.random() < prob) {
-          next[ny][nx].status = "burning";
+          next[ny][nx].status = 'burning';
           next[ny][nx].heat = 1;
         }
       }
@@ -166,10 +143,10 @@ export function calculateRiskBreakdown(
   let highFuelCells = 0;
   for (const row of grid) {
     for (const cell of row) {
-      if (cell.status === "firebreak") continue;
+      if (cell.status === 'firebreak') continue;
       totalFuel += cell.fuel;
       cellCount++;
-      if (cell.fuel > 60 && cell.status === "unburned") highFuelCells++;
+      if (cell.fuel > 60 && cell.status === 'unburned') highFuelCells++;
     }
   }
   const avgFuel = cellCount > 0 ? totalFuel / cellCount : 0;
@@ -198,11 +175,9 @@ export function calculateRiskBreakdown(
   const continuityRatio = cellCount > 0 ? continuity / cellCount : 0;
   const continuityFactor = 0.7 + continuityRatio * 0.9;
 
-  const fuelLoad =
-    (avgFuel / 100) * (1 + (highFuelCells / Math.max(cellCount, 1)) * 0.6);
+  const fuelLoad = (avgFuel / 100) * (1 + (highFuelCells / Math.max(cellCount, 1)) * 0.6);
 
-  const rawRisk =
-    fuelLoad * moistureFactor * windFactor * slopeFactor * continuityFactor;
+  const rawRisk = fuelLoad * moistureFactor * windFactor * slopeFactor * continuityFactor;
   const maxExpectedRisk = 6800;
   const pct = (rawRisk / maxExpectedRisk) * 100;
   const score = Math.min(Math.max(Math.round(pct), 0), 100);
@@ -232,11 +207,7 @@ function largestConnectedFuel(grid: Grid): number {
     for (let x = 0; x < w; x++) {
       if (seen[y * w + x]) continue;
       const cell = grid[y][x];
-      if (
-        cell.fuel < 30 ||
-        cell.status === "firebreak" ||
-        cell.status === "burned"
-      ) {
+      if (cell.fuel < 30 || cell.status === 'firebreak' || cell.status === 'burned') {
         seen[y * w + x] = 1;
         continue;
       }
@@ -249,8 +220,7 @@ function largestConnectedFuel(grid: Grid): number {
         const cx = idx % w;
         const cy = (idx - cx) / w;
         const c = grid[cy][cx];
-        if (c.fuel < 30 || c.status === "firebreak" || c.status === "burned")
-          continue;
+        if (c.fuel < 30 || c.status === 'firebreak' || c.status === 'burned') continue;
         size++;
         if (cx > 0) stack.push(idx - 1);
         if (cx < w - 1) stack.push(idx + 1);
@@ -264,10 +234,10 @@ function largestConnectedFuel(grid: Grid): number {
 }
 
 export function riskCategory(score: number): { label: string; color: string } {
-  if (score <= 25) return { label: "LOW", color: "#3fb950" };
-  if (score <= 50) return { label: "MODERATE", color: "#d29922" };
-  if (score <= 75) return { label: "HIGH", color: "#f85149" };
-  return { label: "EXTREME", color: "#a371f7" };
+  if (score <= 25) return { label: 'LOW', color: '#3fb950' };
+  if (score <= 50) return { label: 'MODERATE', color: '#d29922' };
+  if (score <= 75) return { label: 'HIGH', color: '#f85149' };
+  return { label: 'EXTREME', color: '#a371f7' };
 }
 
 export interface BurnPlan {
@@ -291,9 +261,9 @@ export function runControlledBurn(grid: Grid, plan: BurnPlan = {}): Grid {
       if (y < 0 || y >= h) continue;
       for (let x = 0; x < w; x++) {
         const cell = next[y][x];
-        if (cell.status === "firebreak") continue;
+        if (cell.status === 'firebreak') continue;
         cell.fuel = cell.fuel * (1 - reductionStrength);
-        cell.status = "burned";
+        cell.status = 'burned';
         cell.heat = 0;
       }
     }
@@ -305,7 +275,7 @@ export function runControlledBurn(grid: Grid, plan: BurnPlan = {}): Grid {
 export function isAnyBurning(grid: Grid): boolean {
   for (const row of grid) {
     for (const cell of row) {
-      if (cell.status === "burning") return true;
+      if (cell.status === 'burning') return true;
     }
   }
   return false;

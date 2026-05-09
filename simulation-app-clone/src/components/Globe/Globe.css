@@ -1,15 +1,12 @@
-/* Globe.css */
-
 .globe-wrapper {
   position: relative;
   width: 100%;
   height: 100vh;
   background: #000;
   overflow: hidden;
-  font-family: "Orbitron", "Courier New", monospace;
+  font-family: 'Orbitron', 'Courier New', monospace;
 }
 
-/* The three-globe canvas fills the container */
 .globe-mount {
   width: 100%;
   height: 100%;
@@ -45,7 +42,6 @@
   line-height: 1.5;
 }
 
-/* Keyboard hints — bottom left */
 .globe-hints {
   position: absolute;
   bottom: 1.5rem;
@@ -62,11 +58,11 @@
   letter-spacing: 0.08em;
   color: rgba(0, 220, 255, 0.55);
   text-transform: uppercase;
-  font-family: "Courier New", monospace;
+  font-family: 'Courier New', monospace;
 }
 
 .globe-wrapper::after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   background: radial-gradient(

@@ -7,6 +7,13 @@ import "./Globe.css";
 //  Python script has generated it; null = random-forest fallback)
 export const FIRE_LOCATIONS = [
   {
+    id: "compton",
+    name: "Compton, CA",
+    lat: 33.8938,
+    lng: -118.224,
+    tiffPath: "/tiffs/compton.tif",
+  },
+  {
     id: "pacific-palisades",
     name: "Pacific Palisades, CA",
     lat: 34.047,
@@ -18,63 +25,63 @@ export const FIRE_LOCATIONS = [
     name: "Paradise, CA",
     lat: 39.7596,
     lng: -121.6219,
-    tiffPath: null,
+    tiffPath: "/tiffs/paradise.tif",
   },
   {
     id: "lahaina",
     name: "Lahaina, Maui, HI",
     lat: 20.8783,
     lng: -156.6825,
-    tiffPath: null,
+    tiffPath: "/tiffs/lahaina.tif",
   },
   {
     id: "gatlinburg",
     name: "Gatlinburg, TN",
     lat: 35.7143,
     lng: -83.5102,
-    tiffPath: null,
+    tiffPath: "/tiffs/gatlinburg.tif",
   },
   {
     id: "fort-mcmurray",
     name: "Fort McMurray, Canada",
     lat: 56.7265,
     lng: -111.3803,
-    tiffPath: null,
+    tiffPath: "/tiffs/fort-mcmurray.tif",
   },
   {
-    id: "valparaiso",
-    name: "Valparaiso, Chile",
-    lat: -33.0472,
-    lng: -71.6127,
-    tiffPath: null,
+    id: "knysna",
+    name: "Knysna, South Africa",
+    lat: -34.0356,
+    lng: 23.0465,
+    tiffPath: "/tiffs/knysna.tif",
   },
   {
     id: "mati",
     name: "Mati, Greece",
     lat: 38.0717,
     lng: 23.9691,
-    tiffPath: null,
+    tiffPath: "/tiffs/mati.tif",
   },
   {
     id: "blue-mountains",
     name: "Blue Mountains, Australia",
     lat: -33.6994,
     lng: 150.5684,
-    tiffPath: null,
+    tiffPath: "/tiffs/blue-mountains.tif",
   },
   {
     id: "amazon",
     name: "Amazon Basin, Brazil",
     lat: -3.4653,
     lng: -62.2159,
-    tiffPath: null,
+    tiffPath: "/tiffs/amazon.tif",
   },
   {
-    id: "krasnoyarsk",
-    name: "Krasnoyarsk, Russia",
-    lat: 60.0,
-    lng: 97.0,
-    tiffPath: null,
+    id: "sumatra",
+    name: "Sumatra, Indonesia",
+    lat: -0.5897,
+    lng: 101.3431,
+    tiffPath: "/tiffs/sumatra.tif",
   },
 ];
 
@@ -109,24 +116,18 @@ export default function Globe() {
       };
 
       const globe = GlobeLib()(el)
-        .globeImageUrl(
-          "https://unpkg.com/three-globe/example/img/earth-night.jpg"
-        )
-        .bumpImageUrl(
-          "https://unpkg.com/three-globe/example/img/earth-topology.png"
-        )
-        .backgroundImageUrl(
-          "https://unpkg.com/three-globe/example/img/night-sky.png"
-        )
+        .globeImageUrl("/globe/earth-blue-marble.jpg")
+        .bumpImageUrl("/globe/earth-topology.png")
+        .backgroundImageUrl("/globe/night-sky.png")
         .showAtmosphere(true)
         .atmosphereColor("#1e90ff")
         .atmosphereAltitude(0.22)
         .pointsData(FIRE_LOCATIONS)
         .pointLat("lat")
         .pointLng("lng")
-        .pointColor(() => "#00e5ff")
-        .pointAltitude(0.01)
-        .pointRadius(0.35)
+        .pointColor(() => "#ff6644")
+        .pointAltitude(0.015)
+        .pointRadius(0.55)
         .labelsData(FIRE_LOCATIONS)
         .labelLat("lat")
         .labelLng("lng")
@@ -145,11 +146,11 @@ export default function Globe() {
 
       globeRef.current = globe;
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 1.8);
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.6);
       globe.scene().add(ambientLight);
 
       globe.controls().autoRotate = true;
-      globe.controls().autoRotateSpeed = 0.4;
+      globe.controls().autoRotateSpeed = 0.35;
       globe.controls().enableZoom = true;
 
       const ROTATE_SPEED = 0.04;
@@ -276,12 +277,18 @@ export default function Globe() {
   return (
     <div className="globe-wrapper">
       <div className="globe-mount" ref={mountRef} />
+      <div className="globe-overlay-top">
+        <div className="globe-title">SELECT A LOCATION</div>
+        <div className="globe-subtitle">
+          Click a pin to launch a fire simulation on that landscape.
+        </div>
+      </div>
       <div className="globe-hints">
-        <span>Arrow keys — rotate</span>
-        <span>+ / — — zoom</span>
-        <span>0-9 — jump to city</span>
-        <span>R — reset view</span>
-        <span style={{ color: "#00e5ff" }}>Click a dot to simulate</span>
+        <span>Click pin · simulate</span>
+        <span>Arrow keys · rotate</span>
+        <span>+ / − · zoom</span>
+        <span>0-9 · jump to city</span>
+        <span>R · reset</span>
       </div>
     </div>
   );
