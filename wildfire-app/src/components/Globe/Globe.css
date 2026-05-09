@@ -19,7 +19,26 @@
   display: block;
 }
 
-/* Optional: scanline vignette for cinematic feel */
+/* Keyboard hints — bottom left */
+.globe-hints {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 1.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.globe-hints span {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: rgba(0, 220, 255, 0.55);
+  text-transform: uppercase;
+  font-family: "Courier New", monospace;
+}
+
 .globe-wrapper::after {
   content: "";
   position: absolute;
