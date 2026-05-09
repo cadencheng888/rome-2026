@@ -220,7 +220,9 @@ export default function App() {
           viewMode={viewMode}
           setViewMode={setViewMode}
           onBackToGlobe={handleReturnToGlobe}
-          locationName={selectedLocation?.name ?? null}
+          locations={LOCATIONS}
+          selectedLocationId={selectedLocation?.id ?? null}
+          onLocationChange={handleLocationSelect}
         />
         {loadError && (
           <div

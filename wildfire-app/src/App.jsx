@@ -25,7 +25,13 @@ function SimulationPage() {
     );
   }
 
-  return <SimulationView locationName={location.name} tiffPath={location.tiffPath} />;
+  return (
+    <SimulationView
+      tiffPath={location.tiffPath}
+      locations={FIRE_LOCATIONS}
+      selectedId={location.id}
+    />
+  );
 }
 
 export default function App() {

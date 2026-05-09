@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   calculateRiskBreakdown,
-  createGrid,
   ignite,
   isAnyBurning,
   runControlledBurn,
@@ -12,12 +11,7 @@ import type { Grid, RiskBreakdown, SimParams } from "./fireEngine";
 import { FireCanvas } from "./components/FireCanvas";
 import { FireScene3D } from "./components/FireScene3D";
 import { ControlPanel } from "./components/ControlPanel";
-import {
-  loadElevationMap,
-  loadFuelFromImage,
-  syntheticElevationMap,
-} from "./satelliteLoader";
-import { parseTiff, type TiffTile } from "./tiffLoader";
+import { parseTiff } from "./tiffLoader";
 
 const GRID_W = 120;
 const GRID_H = 104;
@@ -31,18 +25,27 @@ const INITIAL_PARAMS: SimParams = {
   temperature: 88,
 };
 
-type Source = "tiff" | "random" | "upload";
 type ViewMode = "3d" | "2d";
 
-interface Props {
-  locationName: string;
+export interface SimulationLocation {
+  id: string;
+  name: string;
   tiffPath: string | null;
 }
 
-export default function SimulationView({ locationName, tiffPath }: Props) {
+interface Props {
+  tiffPath: string | null;
+  locations: SimulationLocation[];
+  selectedId: string;
+}
+
+export default function SimulationView({
+  tiffPath,
+  locations,
+  selectedId,
+}: Props) {
   const navigate = useNavigate();
 
-  const [source, setSource] = useState<Source>(tiffPath ? "tiff" : "random");
   const [viewMode, setViewMode] = useState<ViewMode>("3d");
   const [grid, setGrid] = useState<Grid | null>(null);
   const [elevation, setElevation] = useState<number[][] | null>(null);
@@ -51,9 +54,6 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
   const [isRunning, setIsRunning] = useState(false);
   const [previousRisk, setPreviousRisk] = useState<number | null>(null);
   const [sceneVersion, setSceneVersion] = useState(0);
-  const [uploadedTile, setUploadedTile] = useState<TiffTile | null>(null);
-  const [uploadName, setUploadName] = useState<string | null>(null);
-  const [isParsingTiff, setIsParsingTiff] = useState(false);
   const [activeTiffUrl, setActiveTiffUrl] = useState<string | null>(null);
 
   const tickRef = useRef<number | null>(null);
@@ -62,9 +62,12 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
     elevationRef.current = elevation;
   }, [elevation]);
 
-  // Load from tiffPath when source === 'tiff'
+  // Load the bundled TIFF for this location.
   useEffect(() => {
-    if (source !== "tiff" || !tiffPath) return;
+    if (!tiffPath) {
+      setLoadError("No terrain data is available for this location.");
+      return;
+    }
 
     let cancelled = false;
     setGrid(null);
@@ -72,6 +75,10 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
     setLoadError(null);
     setIsRunning(false);
     setPreviousRisk(null);
+    setActiveTiffUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
 
     fetch(tiffPath)
       .then((res) => {
@@ -85,7 +92,10 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
           tiffPath.split("/").pop() ?? "region.tiff"
         );
         const tile = await parseTiff(file, GRID_W, GRID_H);
-        if (cancelled) return;
+        if (cancelled) {
+          URL.revokeObjectURL(tile.ndviUrl);
+          return;
+        }
         setActiveTiffUrl(tile.ndviUrl);
         setGrid(tile.grid);
         setElevation(tile.elevation);
@@ -94,63 +104,22 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
       .catch((err) => {
         if (cancelled) return;
         console.error("Could not load TIFF:", err);
-        setLoadError(
-          "Could not load terrain data. Falling back to random forest."
-        );
-        setGrid(createGrid({ width: GRID_W, height: GRID_H }));
-        setElevation(syntheticElevationMap(GRID_W, GRID_H));
+        setLoadError("Could not load terrain data for this location.");
       });
 
     return () => {
       cancelled = true;
     };
-  }, [source, tiffPath]);
+  }, [tiffPath]);
 
-  // Load random forest
-  useEffect(() => {
-    if (source !== "random") return;
-    setGrid(createGrid({ width: GRID_W, height: GRID_H }));
-    setElevation(syntheticElevationMap(GRID_W, GRID_H));
-    setLoadError(null);
-    setIsRunning(false);
-    setPreviousRisk(null);
-  }, [source]);
-
-  // Load from user upload
-  useEffect(() => {
-    if (source !== "upload") return;
-    if (uploadedTile) {
-      setGrid(uploadedTile.grid);
-      setElevation(uploadedTile.elevation);
-      setActiveTiffUrl(uploadedTile.ndviUrl);
-    }
-  }, [source, uploadedTile]);
-
+  // Free the previous tile's blob URL on unmount.
   useEffect(() => {
     return () => {
-      if (uploadedTile) URL.revokeObjectURL(uploadedTile.ndviUrl);
+      setActiveTiffUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
     };
-  }, [uploadedTile]);
-
-  const handleTiffUpload = useCallback(async (file: File) => {
-    setIsParsingTiff(true);
-    setLoadError(null);
-    try {
-      const tile = await parseTiff(file, GRID_W, GRID_H);
-      setUploadedTile(tile);
-      setUploadName(file.name);
-      setSource("upload");
-      setSceneVersion((v) => v + 1);
-    } catch (err) {
-      console.error(err);
-      setLoadError(
-        err instanceof Error
-          ? `Could not parse TIFF: ${err.message}`
-          : "Could not parse TIFF."
-      );
-    } finally {
-      setIsParsingTiff(false);
-    }
   }, []);
 
   const breakdown: RiskBreakdown = grid
@@ -193,17 +162,30 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
   };
 
   const handleReset = () => {
+    if (!tiffPath) return;
     setIsRunning(false);
     setPreviousRisk(null);
     setSceneVersion((v) => v + 1);
-    if (source === "random") {
-      setGrid(createGrid({ width: GRID_W, height: GRID_H }));
-    } else if (source === "upload" && uploadedTile) {
-      setGrid(uploadedTile.grid);
-    } else if (source === "tiff" && tiffPath) {
-      setSource("random");
-      setTimeout(() => setSource("tiff"), 0);
-    }
+    setGrid(null);
+
+    fetch(tiffPath)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then(async (blob) => {
+        const file = new File(
+          [blob],
+          tiffPath.split("/").pop() ?? "region.tiff"
+        );
+        const tile = await parseTiff(file, GRID_W, GRID_H);
+        setGrid(tile.grid);
+        setActiveTiffUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return tile.ndviUrl;
+        });
+      })
+      .catch(() => setLoadError("Could not reload terrain data."));
   };
 
   const handleIgniteRandom = () => {
@@ -230,18 +212,11 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
     setGrid((g) => (g ? runControlledBurn(g) : g));
   };
 
-  const placeholderTextureUrl = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 4;
-    canvas.height = 4;
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#2a4a1a";
-    ctx.fillRect(0, 0, 4, 4);
-    return canvas.toDataURL("image/png");
-  }, []);
-
-  const ndviTextureUrl = activeTiffUrl ?? placeholderTextureUrl;
-  const useDisplacement = source === "tiff" || source === "upload";
+  // Fallback to a 1px transparent PNG until the TIFF finishes parsing — keeps
+  // the texture-loading prop strictly a string for FireScene3D / FireCanvas.
+  const ndviTextureUrl =
+    activeTiffUrl ??
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
   return (
     <div style={{ display: "flex", height: "100vh", width: "100vw" }}>
@@ -289,16 +264,11 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
           >
             ← GLOBE
           </button>
-          <div
-            style={{
-              color: "#8b949e",
-              fontSize: 12,
-              letterSpacing: 2,
-              fontWeight: 600,
-            }}
-          >
-            {locationName.toUpperCase()}
-          </div>
+          <LocationDropdown
+            locations={locations}
+            selectedId={selectedId}
+            onChange={(id) => navigate(`/simulation/${id}`)}
+          />
           <div style={{ flex: 1 }} />
           <SegmentedControl
             options={[
@@ -308,21 +278,6 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
             value={viewMode}
             onChange={(v) => setViewMode(v as ViewMode)}
           />
-          <UploadTiffButton
-            onTiffSelected={handleTiffUpload}
-            isParsingTiff={isParsingTiff}
-            hasUpload={uploadedTile !== null}
-          />
-          {tiffPath && (
-            <SegmentedControl
-              options={[
-                { value: "tiff", label: "SATELLITE" },
-                { value: "random", label: "RANDOM" },
-              ]}
-              value={source === "upload" ? "tiff" : source}
-              onChange={(v) => setSource(v as Source)}
-            />
-          )}
         </div>
 
         {loadError && (
@@ -366,8 +321,8 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
                 windDirX={params.windDirX}
                 windDirY={params.windDirY}
                 windSpeed={params.windSpeed}
-                sceneKey={`${source}-${sceneVersion}`}
-                useDisplacement={useDisplacement}
+                sceneKey={`${selectedId}-${sceneVersion}`}
+                useDisplacement
               />
             ) : (
               <LoadingOverlay />
@@ -486,51 +441,43 @@ function SegmentedControl<T extends string>({
   );
 }
 
-function UploadTiffButton({
-  onTiffSelected,
-  isParsingTiff,
-  hasUpload,
+function LocationDropdown({
+  locations,
+  selectedId,
+  onChange,
 }: {
-  onTiffSelected: (file: File) => void;
-  isParsingTiff: boolean;
-  hasUpload: boolean;
+  locations: SimulationLocation[];
+  selectedId: string;
+  onChange: (id: string) => void;
 }) {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   return (
-    <>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".tif,.tiff,image/tiff"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) onTiffSelected(file);
-          e.target.value = "";
-        }}
-      />
-      <button
-        onClick={() => fileInputRef.current?.click()}
-        disabled={isParsingTiff}
-        style={{
-          background: "#0e141b",
-          border: "1px solid #1f2630",
-          color: isParsingTiff ? "#6e7681" : "#cdd9e8",
-          padding: "8px 14px",
-          fontSize: 12,
-          fontWeight: 600,
-          letterSpacing: 1,
-          borderRadius: 8,
-          cursor: isParsingTiff ? "wait" : "pointer",
-        }}
-      >
-        {isParsingTiff
-          ? "PARSING…"
-          : hasUpload
-          ? "REPLACE TIFF"
-          : "UPLOAD TIFF"}
-      </button>
-    </>
+    <select
+      value={selectedId}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        background: "#0e141b",
+        border: "1px solid #1f2630",
+        color: "#cdd9e8",
+        padding: "8px 30px 8px 14px",
+        fontSize: 12,
+        fontWeight: 600,
+        letterSpacing: 1.5,
+        textTransform: "uppercase",
+        borderRadius: 8,
+        cursor: "pointer",
+        appearance: "none",
+        backgroundImage:
+          'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'6\' viewBox=\'0 0 10 6\'><path fill=\'%238b949e\' d=\'M0 0l5 6 5-6z\'/></svg>")',
+        backgroundRepeat: "no-repeat",
+        backgroundPosition: "right 10px center",
+      }}
+    >
+      {locations.map((loc) => (
+        <option key={loc.id} value={loc.id}>
+          {loc.name}
+        </option>
+      ))}
+    </select>
   );
 }
 
