@@ -1,5 +1,5 @@
 # ============================================
-# train_burn_suitability_v3.py
+# train (3rd edition).py
 # ============================================
 #
 # ECOLOGY-AWARE PRESCRIBED BURN TRAINING

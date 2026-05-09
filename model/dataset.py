@@ -58,9 +58,9 @@ REGIONS = {
         [95.0, -11.0, 141.0, 6.0]
     ),
 
-    "siberia": ee.Geometry.Rectangle(
-        [60.0, 50.0, 160.0, 75.0]
-    ),
+    # "siberia": ee.Geometry.Rectangle(
+    #     [60.0, 50.0, 160.0, 75.0]
+    # ),
 }
 
 os.makedirs(EXPORT_ROOT, exist_ok=True)
