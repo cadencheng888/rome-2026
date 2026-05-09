@@ -7,6 +7,13 @@ import "./Globe.css";
 //  Python script has generated it; null = random-forest fallback)
 export const FIRE_LOCATIONS = [
   {
+    id: "compton",
+    name: "Compton, CA",
+    lat: 33.8938,
+    lng: -118.224,
+    tiffPath: "/tiffs/compton.tif",
+  },
+  {
     id: "pacific-palisades",
     name: "Pacific Palisades, CA",
     lat: 34.047,
