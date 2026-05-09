@@ -10,7 +10,7 @@ import type { Grid, RiskBreakdown, SimParams } from './fireEngine';
 import { FireCanvas } from './components/FireCanvas';
 import { FireScene3D } from './components/FireScene3D';
 import { ControlPanel } from './components/ControlPanel';
-import { loadElevationMap, loadFuelFromImage } from './satelliteLoader';
+import { loadElevationMap, loadFuelAndTextureFromImage } from './satelliteLoader';
 import Globe, { type LocationOption } from './components/Globe/Globe';
 
 const GRID_W = 120;
@@ -66,6 +66,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [previousRisk, setPreviousRisk] = useState<number | null>(null);
   const [sceneVersion, setSceneVersion] = useState(0);
+  const [naturalTextureUrl, setNaturalTextureUrl] = useState<string | null>(null);
 
   const ndviUrl = selectedLocation?.ndviUrl ?? LOCATIONS[0].ndviUrl;
   const elevationUrl = selectedLocation?.elevationUrl ?? LOCATIONS[0].elevationUrl;
@@ -81,13 +82,19 @@ export default function App() {
     setPreviousRisk(null);
 
     Promise.all([
-      loadFuelFromImage(ndviUrl, GRID_W, GRID_H),
+      loadFuelAndTextureFromImage(ndviUrl, GRID_W, GRID_H),
       loadElevationMap(elevationUrl, GRID_W, GRID_H),
     ])
-      .then(([g, e]) => {
+      .then(([{ grid: g, naturalTextureUrl: texUrl }, e]) => {
         if (!cancelled) {
           setGrid(g);
           setElevation(e);
+          setNaturalTextureUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return texUrl;
+          });
+        } else {
+          URL.revokeObjectURL(texUrl);
         }
       })
       .catch((err) => {
@@ -145,8 +152,14 @@ export default function App() {
     setPreviousRisk(null);
     setSceneVersion((v) => v + 1);
     setGrid(null);
-    loadFuelFromImage(ndviUrl, GRID_W, GRID_H)
-      .then(setGrid)
+    loadFuelAndTextureFromImage(ndviUrl, GRID_W, GRID_H)
+      .then(({ grid: g, naturalTextureUrl: texUrl }) => {
+        setGrid(g);
+        setNaturalTextureUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return texUrl;
+        });
+      })
       .catch(() => setLoadError('Could not reload satellite image.'));
   };
 
@@ -244,7 +257,7 @@ export default function App() {
                 grid={grid}
                 elevation={elevation}
                 onCellClick={handleClick}
-                ndviTextureUrl={ndviUrl}
+                ndviTextureUrl={naturalTextureUrl ?? ndviUrl}
                 elevationTextureUrl={elevationUrl}
                 windDirX={params.windDirX}
                 windDirY={params.windDirY}
