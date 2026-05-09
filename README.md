@@ -91,7 +91,6 @@ We also plan to incorporate real-time environmental data streams across the glob
   - drought conditions
   - recent precipitation
   - vegetation moisture
-  - 
 Integrating live weather data would allow the model to move beyond static ecological suitability estimation.
 
 Ultimately, our goal is not to automate wildfire decision-making, but to build a scalable AI-assisted analysis tool that can help researchers, ecologists, and fire-management experts better understand control-fire techniques, and serve as a public awareness tool.
