@@ -35,7 +35,7 @@ def export_ndvi_elevation(
     name,
     lat,
     lon,
-    buffer_km=25,
+    buffer_km=50,
     start_date="2024-06-01",
     end_date="2024-09-30",
     scale=30,

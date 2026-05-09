@@ -1,35 +1,103 @@
 import { useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import "./Globe.css";
 
-// Cities to label + connect with arcs
-const FIRE_LOCATIONS = [
-  { name: "Pacific Palisades, CA", lat: 34.047, lng: -118.526 },
-  { name: "Paradise, CA", lat: 39.7596, lng: -121.6219 },
-  { name: "Lahaina, Maui, HI", lat: 20.8783, lng: -156.6825 },
-  { name: "Gatlinburg, TN", lat: 35.7143, lng: -83.5102 },
-  { name: "Fort McMurray, Canada", lat: 56.7265, lng: -111.3803 },
-  { name: "Valparaiso, Chile", lat: -33.0472, lng: -71.6127 },
-  { name: "Mati, Greece", lat: 38.0717, lng: 23.9691 },
-  { name: "Blue Mountains, Australia", lat: -33.6994, lng: 150.5684 },
-  { name: "Amazon Basin, Brazil", lat: -3.4653, lng: -62.2159 },
-  { name: "Krasnoyarsk, Russia", lat: 60.0, lng: 97.0 },
+// Each entry needs an id (used as route param) and optional tiffPath
+// (set tiffPath to the public URL of the pre-processed .tiff once the
+//  Python script has generated it; null = random-forest fallback)
+export const FIRE_LOCATIONS = [
+  {
+    id: "compton",
+    name: "Compton, CA",
+    lat: 33.8938,
+    lng: -118.224,
+    tiffPath: "/tiffs/compton.tif",
+  },
+  {
+    id: "pacific-palisades",
+    name: "Pacific Palisades, CA",
+    lat: 34.047,
+    lng: -118.526,
+    tiffPath: "/tiffs/palisades.tif",
+  },
+  {
+    id: "paradise",
+    name: "Paradise, CA",
+    lat: 39.7596,
+    lng: -121.6219,
+    tiffPath: "/tiffs/paradise.tif",
+  },
+  {
+    id: "lahaina",
+    name: "Lahaina, Maui, HI",
+    lat: 20.8783,
+    lng: -156.6825,
+    tiffPath: "/tiffs/lahaina.tif",
+  },
+  {
+    id: "gatlinburg",
+    name: "Gatlinburg, TN",
+    lat: 35.7143,
+    lng: -83.5102,
+    tiffPath: "/tiffs/gatlinburg.tif",
+  },
+  {
+    id: "fort-mcmurray",
+    name: "Fort McMurray, Canada",
+    lat: 56.7265,
+    lng: -111.3803,
+    tiffPath: "/tiffs/fort-mcmurray.tif",
+  },
+  {
+    id: "valparaiso",
+    name: "Valparaiso, Chile",
+    lat: -33.0472,
+    lng: -71.6127,
+    tiffPath: "/tiffs/valparaiso.tif",
+  },
+  {
+    id: "mati",
+    name: "Mati, Greece",
+    lat: 38.0717,
+    lng: 23.9691,
+    tiffPath: "/tiffs/mati.tif",
+  },
+  {
+    id: "blue-mountains",
+    name: "Blue Mountains, Australia",
+    lat: -33.6994,
+    lng: 150.5684,
+    tiffPath: "/tiffs/blue-mountains.tif",
+  },
+  {
+    id: "amazon",
+    name: "Amazon Basin, Brazil",
+    lat: -3.4653,
+    lng: -62.2159,
+    tiffPath: "/tiffs/amazon.tif",
+  },
+  {
+    id: "krasnoyarsk",
+    name: "Krasnoyarsk, Russia",
+    lat: 60.0,
+    lng: 97.0,
+    tiffPath: "/tiffs/krasnoyarsk.tif",
+  },
 ];
 
 export default function Globe() {
   const mountRef = useRef(null);
   const globeRef = useRef(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    let Globe, THREE, renderer, scene, camera, animId;
-
     async function init() {
-      // Dynamically import so it doesn't break SSR
       const [globeMod, threeMod] = await Promise.all([
         import("globe.gl"),
         import("three"),
       ]);
-      Globe = globeMod.default;
-      THREE = threeMod;
+      const GlobeLib = globeMod.default;
+      const THREE = threeMod;
 
       const el = mountRef.current;
       if (!el) return;
@@ -37,8 +105,17 @@ export default function Globe() {
       const w = el.clientWidth;
       const h = el.clientHeight;
 
-      const globe = Globe()(el)
-        // ── Earth textures ──────────────────────────────────────────
+      const navigateToLocation = (location) => {
+        globe.pointOfView(
+          { lat: location.lat, lng: location.lng, altitude: 1.2 },
+          1200
+        );
+        setTimeout(() => {
+          navigate(`/simulation/${location.id}`);
+        }, 1200);
+      };
+
+      const globe = GlobeLib()(el)
         .globeImageUrl(
           "https://unpkg.com/three-globe/example/img/earth-night.jpg"
         )
@@ -48,18 +125,15 @@ export default function Globe() {
         .backgroundImageUrl(
           "https://unpkg.com/three-globe/example/img/night-sky.png"
         )
-        // ── Atmosphere ───────────────────────────────────────────────
         .showAtmosphere(true)
         .atmosphereColor("#1e90ff")
         .atmosphereAltitude(0.22)
-        // ── City dots ────────────────────────────────────────────────
         .pointsData(FIRE_LOCATIONS)
         .pointLat("lat")
         .pointLng("lng")
         .pointColor(() => "#00e5ff")
         .pointAltitude(0.01)
         .pointRadius(0.35)
-        // ── City labels ──────────────────────────────────────────────
         .labelsData(FIRE_LOCATIONS)
         .labelLat("lat")
         .labelLng("lng")
@@ -69,38 +143,23 @@ export default function Globe() {
         .labelColor(() => "#ffffff")
         .labelResolution(3)
         .labelAltitude(0.02)
-        // ── Interactivity ────────────────────────────────────────────
-        .onPointClick((point) => {
-          globe.pointOfView(
-            { lat: point.lat, lng: point.lng, altitude: 1.2 },
-            1200
-          );
-        })
-        .onLabelClick((label) => {
-          globe.pointOfView(
-            { lat: label.lat, lng: label.lng, altitude: 1.2 },
-            1200
-          );
-        })
+        .onPointClick((point) => navigateToLocation(point))
+        .onLabelClick((label) => navigateToLocation(label))
         .pointLabel("name")
-        // ── Camera ───────────────────────────────────────────────────
         .pointOfView({ lat: 20, lng: 90, altitude: 2.2 })
         .width(w)
         .height(h);
 
       globeRef.current = globe;
 
-      // Boost brightness with an extra ambient light
       const ambientLight = new THREE.AmbientLight(0xffffff, 1.8);
       globe.scene().add(ambientLight);
 
-      // Slow auto-rotate
       globe.controls().autoRotate = true;
       globe.controls().autoRotateSpeed = 0.4;
       globe.controls().enableZoom = true;
 
-      // ── Keyboard controls (rAF-driven for fluid hold) ────────────
-      const ROTATE_SPEED = 0.04; // degrees per ms
+      const ROTATE_SPEED = 0.04;
       const ZOOM_SPEED = 0.001;
       const MIN_ALT = 0.5;
       const MAX_ALT = 5.0;
@@ -116,7 +175,6 @@ export default function Globe() {
           lastTime = null;
           return;
         }
-
         const dt = lastTime ? now - lastTime : 0;
         lastTime = now;
         if (!dt) return;
@@ -157,10 +215,8 @@ export default function Globe() {
       const onKeyDown = (e) => {
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")
           return;
-
         if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key))
           e.preventDefault();
-
         if (
           [
             "ArrowLeft",
@@ -176,18 +232,19 @@ export default function Globe() {
           held.add(e.key);
           return;
         }
-
         const keyNum = Number(e.key);
-        if (!isNaN(keyNum) && keyNum >= 0 && keyNum <= FIRE_LOCATIONS.length) {
-          const city = FIRE_LOCATIONS[keyNum];
+        if (!isNaN(keyNum) && keyNum >= 0 && keyNum < FIRE_LOCATIONS.length) {
           globe.pointOfView(
-            { lat: city.lat, lng: city.lng, altitude: 1.2 },
+            {
+              lat: FIRE_LOCATIONS[keyNum].lat,
+              lng: FIRE_LOCATIONS[keyNum].lng,
+              altitude: 1.2,
+            },
             1200
           );
         }
-        if (e.key === "r" || e.key === "R") {
+        if (e.key === "r" || e.key === "R")
           globe.pointOfView(DEFAULT_POV, 1200);
-        }
       };
 
       const onKeyUp = (e) => {
@@ -199,14 +256,13 @@ export default function Globe() {
         if (!held.size) lastTime = null;
       };
 
-      window.addEventListener("keydown", onKeyDown);
-      window.addEventListener("keyup", onKeyUp);
-
-      // Resize handler
       const onResize = () => {
         if (!el) return;
         globe.width(el.clientWidth).height(el.clientHeight);
       };
+
+      window.addEventListener("keydown", onKeyDown);
+      window.addEventListener("keyup", onKeyUp);
       window.addEventListener("resize", onResize);
 
       return () => {
@@ -218,11 +274,11 @@ export default function Globe() {
       };
     }
 
-    const cleanup = init();
+    const cleanupPromise = init();
     return () => {
-      cleanup.then((fn) => fn?.());
+      cleanupPromise.then((fn) => fn?.());
     };
-  }, []);
+  }, [navigate]);
 
   return (
     <div className="globe-wrapper">
@@ -232,6 +288,7 @@ export default function Globe() {
         <span>+ / — — zoom</span>
         <span>0-9 — jump to city</span>
         <span>R — reset view</span>
+        <span style={{ color: "#00e5ff" }}>Click a dot to simulate</span>
       </div>
     </div>
   );
