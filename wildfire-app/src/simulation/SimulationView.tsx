@@ -5,11 +5,12 @@ import {
   ignite,
   igniteCluster,
   isAnyBurning,
+  placeSettlements,
   runControlledBurn,
   step,
   stepControlled,
 } from "./fireEngine";
-import type { Grid, RiskBreakdown, SimParams } from "./fireEngine";
+import type { Grid, RiskBreakdown, SimParams, Settlement } from "./fireEngine";
 import { FireCanvas } from "./components/FireCanvas";
 import { FireScene3D } from "./components/FireScene3D";
 import { ControlPanel } from "./components/ControlPanel";
@@ -56,6 +57,8 @@ export interface SimSummary {
   riskBefore: number;
   riskAfter: number;
   elapsedSeconds: number;
+  structuresDestroyed: number;
+  structuresTotal: number;
 }
 
 export interface LiveStats {
@@ -63,6 +66,9 @@ export interface LiveStats {
   cellsBurned: number;
   totalCells: number;
   elapsedSeconds: number;
+  structuresBurning: number;
+  structuresDestroyed: number;
+  structuresTotal: number;
 }
 
 interface Props {
@@ -129,16 +135,32 @@ function controlledParams(): SimParams {
 function gridStats(grid: Grid) {
   let burning = 0,
     burned = 0,
-    total = 0;
+    total = 0,
+    structuresBurning = 0,
+    structuresDestroyed = 0,
+    structuresTotal = 0;
   for (const row of grid) {
     for (const cell of row) {
       if (cell.status === "firebreak") continue;
+      if (cell.residential) {
+        structuresTotal++;
+        if (cell.status === "residential_burning") structuresBurning++;
+        if (cell.status === "residential_destroyed") structuresDestroyed++;
+        continue; // don't double-count in vegetation totals
+      }
       total++;
       if (cell.status === "burning") burning++;
       if (cell.status === "burned") burned++;
     }
   }
-  return { burning, burned, total };
+  return {
+    burning,
+    burned,
+    total,
+    structuresBurning,
+    structuresDestroyed,
+    structuresTotal,
+  };
 }
 
 // ── component ────────────────────────────────────────────────────────────────
@@ -162,6 +184,7 @@ export default function SimulationView({
   const [activeTiffUrl, setActiveTiffUrl] = useState<string | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
   const [summary, setSummary] = useState<SimSummary | null>(null);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
 
   const tickRef = useRef<number | null>(null);
   const snuffRef = useRef<number | null>(null);
@@ -248,8 +271,11 @@ export default function SimulationView({
           URL.revokeObjectURL(tile.ndviUrl);
           return;
         }
+        const { grid: gridWithSettlements, settlements: placed } =
+          placeSettlements(tile.grid);
         setActiveTiffUrl(tile.ndviUrl);
-        setGrid(tile.grid);
+        setGrid(gridWithSettlements);
+        setSettlements(placed);
         setElevation(tile.elevation);
         setSceneVersion((v) => v + 1);
       })
@@ -308,6 +334,9 @@ export default function SimulationView({
           cellsBurned: s.burned,
           totalCells: s.total,
           elapsedSeconds: Math.round(elapsedRef.current),
+          structuresBurning: s.structuresBurning,
+          structuresDestroyed: s.structuresDestroyed,
+          structuresTotal: s.structuresTotal,
         });
         return next;
       });
@@ -332,6 +361,8 @@ export default function SimulationView({
           riskBefore: startRiskRef.current,
           riskAfter: riskScore,
           elapsedSeconds: Math.round(elapsedRef.current),
+          structuresDestroyed: s.structuresDestroyed,
+          structuresTotal: s.structuresTotal,
         });
         setLiveStats(null);
         return g;
@@ -375,7 +406,10 @@ export default function SimulationView({
           tiffPath.split("/").pop() ?? "region.tiff"
         );
         const tile = await parseTiff(file, GRID_W, GRID_H);
-        setGrid(tile.grid);
+        const { grid: gridWithSettlements, settlements: placed } =
+          placeSettlements(tile.grid);
+        setGrid(gridWithSettlements);
+        setSettlements(placed);
         setActiveTiffUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return tile.ndviUrl;
@@ -455,6 +489,8 @@ export default function SimulationView({
           riskBefore: preRisk,
           riskAfter: afterRisk,
           elapsedSeconds: Math.round(elapsedRef.current),
+          structuresDestroyed: s.structuresDestroyed,
+          structuresTotal: s.structuresTotal,
         });
         setLiveStats(null);
         return snuffed;
@@ -666,6 +702,18 @@ function LiveStatsHUD({ stats, mode }: { stats: LiveStats; mode: FireMode }) {
   const accent = mode === "wildfire" ? "#f85149" : "#1f6feb";
   const label = mode === "wildfire" ? "WILDFIRE" : "CONTROLLED BURN";
 
+  const structureColor =
+    stats.structuresDestroyed > 0
+      ? "#f85149"
+      : stats.structuresBurning > 0
+      ? "#d29922"
+      : "#3fb950";
+
+  const structureValue =
+    stats.structuresTotal > 0
+      ? `${stats.structuresDestroyed}/${stats.structuresTotal}`
+      : "—";
+
   return (
     <div
       style={{
@@ -705,6 +753,11 @@ function LiveStatsHUD({ stats, mode }: { stats: LiveStats; mode: FireMode }) {
         label="CONSUMED"
         value={`${pct}%`}
         color={pct > 30 ? "#f85149" : pct > 10 ? "#d29922" : "#3fb950"}
+      />
+      <StatPill
+        label="STRUCTURES LOST"
+        value={structureValue}
+        color={structureColor}
       />
       <StatPill
         label="ELAPSED"
