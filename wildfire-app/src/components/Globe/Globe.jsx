@@ -64,6 +64,20 @@ export default function Globe() {
         .labelColor(() => "#ffffff")
         .labelResolution(3)
         .labelAltitude(0.02)
+        // ── Interactivity ────────────────────────────────────────────
+        .onPointClick((point) => {
+          globe.pointOfView(
+            { lat: point.lat, lng: point.lng, altitude: 1.2 },
+            1200
+          );
+        })
+        .onLabelClick((label) => {
+          globe.pointOfView(
+            { lat: label.lat, lng: label.lng, altitude: 1.2 },
+            1200
+          );
+        })
+        .pointLabel("name")
         // ── Camera ───────────────────────────────────────────────────
         .pointOfView({ lat: 20, lng: 90, altitude: 2.2 })
         .width(w)
