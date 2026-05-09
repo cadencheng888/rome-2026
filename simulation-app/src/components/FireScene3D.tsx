@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
-import { OrbitControls, Sky, useTexture } from '@react-three/drei';
+import { OrbitControls, Sky, Stars, useTexture } from '@react-three/drei';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { Grid } from '../fireEngine';
@@ -9,6 +9,7 @@ interface Props {
   elevation: number[][];
   onCellClick: (x: number, y: number) => void;
   ndviTextureUrl: string;
+  elevationTextureUrl: string | null;
   windDirX: number;
   windDirY: number;
   windSpeed: number;
@@ -23,28 +24,42 @@ export function FireScene3D({
   elevation,
   onCellClick,
   ndviTextureUrl,
+  elevationTextureUrl,
   windDirX,
   windDirY,
   windSpeed,
   sceneKey,
   useDisplacement,
 }: Props) {
-  const smoothed = useMemo(() => smoothElevation(elevation, 3), [elevation]);
+  const smoothed = useMemo(() => smoothElevation(elevation, 2), [elevation]);
   return (
     <Canvas
       shadows
-      camera={{ position: [0, 80, 140], fov: 45, near: 1, far: 1000 }}
-      style={{ width: '100%', height: '100%', background: 'linear-gradient(180deg, #0a1828 0%, #1f3a55 60%, #563a2c 100%)' }}
+      camera={{ position: [0, 80, 140], fov: 45, near: 1, far: 2000 }}
+      style={{ width: '100%', height: '100%', background: 'radial-gradient(ellipse at 50% 70%, #1a2942 0%, #0a1020 55%, #03060d 100%)' }}
     >
       <Suspense fallback={null}>
         <Lights />
-        <Sky distance={450000} sunPosition={[100, 30, 100]} inclination={0.55} azimuth={0.25} />
-        <fog attach="fog" args={['#3a4858', 220, 600]} />
+        <Sky
+          distance={450000}
+          sunPosition={[80, 6, 90]}
+          inclination={0.49}
+          azimuth={0.25}
+          mieDirectionalG={0.92}
+          turbidity={8}
+          rayleigh={2.5}
+        />
+        <Stars radius={900} depth={120} count={1800} factor={3.5} saturation={0} fade speed={0.4} />
+        <HorizonHaze />
+        <fog attach="fog" args={['#1a2334', 320, 900]} />
 
+        <GridFloor planeH={(PLANE_SIZE * grid.length) / (grid[0]?.length ?? 1)} />
+        <Water planeH={(PLANE_SIZE * grid.length) / (grid[0]?.length ?? 1)} />
         <Terrain
           grid={grid}
           elevation={smoothed}
           ndviTextureUrl={ndviTextureUrl}
+          elevationTextureUrl={elevationTextureUrl}
           onCellClick={onCellClick}
           useDisplacement={useDisplacement}
         />
@@ -135,23 +150,107 @@ function buildElevationTexture(elevation: number[][]): THREE.CanvasTexture | nul
 function Lights() {
   return (
     <>
-      <ambientLight intensity={0.45} color="#cdd9e8" />
+      <ambientLight intensity={0.32} color="#aebbcf" />
       <directionalLight
-        position={[80, 120, 60]}
-        intensity={1.4}
-        color="#fff5e2"
+        position={[120, 160, 80]}
+        intensity={1.55}
+        color="#ffe8b8"
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
+        shadow-camera-near={1}
+        shadow-camera-far={500}
+        shadow-camera-left={-150}
+        shadow-camera-right={150}
+        shadow-camera-top={150}
+        shadow-camera-bottom={-150}
       />
-      <hemisphereLight args={['#a8c8ff', '#4a3526', 0.4]} />
+      <hemisphereLight args={['#aac9ff', '#3a2e22', 0.55]} />
     </>
   );
 }
 
-const TERRAIN_SEGMENTS_X = 240;
-const TERRAIN_SEGMENTS_Y = 180;
-const ELEVATION_SCALE = 18;
+function GridFloor({ planeH }: { planeH: number }) {
+  const size = Math.max(PLANE_SIZE, planeH) * 4;
+  const divisions = 80;
+  return (
+    <group position={[0, -2.2, 0]}>
+      {/* Dark backdrop plane that the grid sits on top of */}
+      <mesh rotation-x={-Math.PI / 2} position={[0, -0.05, 0]}>
+        <planeGeometry args={[size, size]} />
+        <meshBasicMaterial color="#070d1a" />
+      </mesh>
+      {/* Soft radial glow under the terrain */}
+      <mesh rotation-x={-Math.PI / 2} position={[0, 0.02, 0]}>
+        <circleGeometry args={[Math.max(PLANE_SIZE, planeH) * 0.9, 64]} />
+        <meshBasicMaterial color="#1a3358" transparent opacity={0.55} depthWrite={false} />
+      </mesh>
+      {/* Bright primary grid */}
+      <gridHelper args={[size, divisions, '#3a6fb0', '#1a2c4a']} position={[0, 0.03, 0]} />
+      {/* Wider accent grid every 5 cells for a "data tile" feel */}
+      <gridHelper args={[size, divisions / 5, '#5d9bd6', '#2a4674']} position={[0, 0.04, 0]} />
+    </group>
+  );
+}
+
+function HorizonHaze() {
+  const material = useMemo(() => {
+    return new THREE.ShaderMaterial({
+      uniforms: {},
+      vertexShader: `
+        varying float vY;
+        void main() {
+          vY = position.y;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying float vY;
+        void main() {
+          // y ranges over the cylinder height; normalize 0..1
+          float t = clamp((vY + 60.0) / 160.0, 0.0, 1.0);
+          vec3 warm   = vec3(0.95, 0.45, 0.18); // golden-hour orange
+          vec3 mid    = vec3(0.42, 0.22, 0.45); // dusk purple
+          vec3 cool   = vec3(0.05, 0.09, 0.18); // deep navy
+          vec3 col = mix(warm, mid, smoothstep(0.0, 0.45, t));
+          col      = mix(col,  cool, smoothstep(0.45, 1.0, t));
+          float alpha = smoothstep(1.0, 0.15, t) * 0.85;
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
+      transparent: true,
+      side: THREE.BackSide,
+      depthWrite: false,
+    });
+  }, []);
+  return (
+    <mesh material={material} position={[0, 20, 0]} renderOrder={-1}>
+      <cylinderGeometry args={[700, 700, 160, 64, 1, true]} />
+    </mesh>
+  );
+}
+
+function Water({ planeH }: { planeH: number }) {
+  return (
+    <mesh rotation-x={-Math.PI / 2} position={[0, WATER_LEVEL, 0]} receiveShadow>
+      <planeGeometry args={[PLANE_SIZE, planeH]} />
+      <meshStandardMaterial
+        color="#2b4664"
+        transparent
+        opacity={0.6}
+        roughness={0.15}
+        metalness={0.55}
+        emissive="#0e1c2a"
+        emissiveIntensity={0.1}
+      />
+    </mesh>
+  );
+}
+
+const TERRAIN_SEGMENTS_X = 200;
+const TERRAIN_SEGMENTS_Y = 150;
+const ELEVATION_SCALE = 22;
+const WATER_LEVEL = 0.8;
 
 function Terrain({
   grid,
@@ -163,6 +262,7 @@ function Terrain({
   grid: Grid;
   elevation: number[][];
   ndviTextureUrl: string;
+  elevationTextureUrl: string | null;
   onCellClick: (x: number, y: number) => void;
   useDisplacement: boolean;
 }) {
@@ -173,6 +273,7 @@ function Terrain({
   const h = grid.length;
   const planeH = (PLANE_SIZE * h) / w;
 
+  // GPU and JS sample the SAME smoothed array → tree feet line up with terrain.
   const displacementTexture = useMemo(() => buildElevationTexture(elevation), [elevation]);
 
   const burnOverlay = useBurnOverlay(grid);
@@ -319,10 +420,18 @@ function Fire({ grid, elevation }: { grid: Grid; elevation: number[][] }) {
   });
 
   return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, maxFlames]} frustumCulled={false}>
-      <coneGeometry args={[0.9, 1, 6, 1, true]} />
-      <meshBasicMaterial color="#ff7020" transparent opacity={0.92} blending={THREE.AdditiveBlending} depthWrite={false} />
-    </instancedMesh>
+    <group>
+      <instancedMesh ref={meshRef} args={[undefined, undefined, maxFlames]} frustumCulled={false}>
+        <coneGeometry args={[0.9, 1, 7, 1, true]} />
+        <meshBasicMaterial
+          color="#ffb040"
+          transparent
+          opacity={0.95}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </instancedMesh>
+    </group>
   );
 }
 
@@ -414,6 +523,17 @@ function Smoke({
   );
 }
 
+type TreeKind = 'conifer' | 'broadleaf';
+
+interface TreePlace {
+  x: number;
+  y: number;
+  scale: number;
+  offsetX: number;
+  offsetZ: number;
+  kind: TreeKind;
+}
+
 function Trees({
   grid,
   elevation,
@@ -424,7 +544,8 @@ function Trees({
   sceneKey: string;
 }) {
   const trunkRef = useRef<THREE.InstancedMesh>(null!);
-  const leavesRef = useRef<THREE.InstancedMesh>(null!);
+  const coneLeavesRef = useRef<THREE.InstancedMesh>(null!);
+  const ballLeavesRef = useRef<THREE.InstancedMesh>(null!);
   const w = grid[0]?.length ?? 0;
   const h = grid.length;
   const initialGridRef = useRef<Grid | null>(null);
@@ -435,9 +556,9 @@ function Trees({
     lastKeyRef.current = sceneKey;
   }
 
-  const treeCells = useMemo(() => {
+  const treeCells = useMemo<TreePlace[]>(() => {
     const snapshot = initialGridRef.current ?? grid;
-    const arr: Array<{ x: number; y: number; scale: number; offsetX: number; offsetZ: number }> = [];
+    const arr: TreePlace[] = [];
     let seed = 1;
     const rand = () => {
       seed = (seed * 9301 + 49297) % 233280;
@@ -449,12 +570,17 @@ function Trees({
         if (!cell) continue;
         if (cell.fuel > 55 && cell.status !== 'firebreak') {
           if (rand() < 0.45) {
+            // Cell elevation determines mix: high = mostly conifer, low = mostly broadleaf
+            const elevFrac = Math.min(1, (elevation[y]?.[x] ?? 0));
+            const coniferChance = 0.35 + elevFrac * 0.5;
+            const kind: TreeKind = rand() < coniferChance ? 'conifer' : 'broadleaf';
             arr.push({
               x,
               y,
               scale: 0.7 + rand() * 0.7,
               offsetX: (rand() - 0.5) * 1.2,
               offsetZ: (rand() - 0.5) * 1.2,
+              kind,
             });
           }
         }
@@ -463,53 +589,107 @@ function Trees({
     return arr;
   }, [sceneKey, w, h]);
 
-  const count = Math.min(treeCells.length, 4000);
+  const MAX_PER_KIND = 3000;
 
   useEffect(() => {
     const trunkMesh = trunkRef.current;
-    const leavesMesh = leavesRef.current;
-    if (!trunkMesh || !leavesMesh) return;
+    const coneMesh = coneLeavesRef.current;
+    const ballMesh = ballLeavesRef.current;
+    if (!trunkMesh || !coneMesh || !ballMesh) return;
+
     const dummy = new THREE.Object3D();
-    for (let i = 0; i < count; i++) {
+    const hidden = new THREE.Object3D();
+    hidden.position.set(0, -10000, 0);
+    hidden.scale.set(0, 0, 0);
+    hidden.updateMatrix();
+
+    let coneIdx = 0;
+    let ballIdx = 0;
+    let trunkIdx = 0;
+    const trunkMax = MAX_PER_KIND * 2;
+
+    for (let i = 0; i < treeCells.length; i++) {
       const t = treeCells[i];
+      if (t.kind === 'conifer' && coneIdx >= MAX_PER_KIND) continue;
+      if (t.kind === 'broadleaf' && ballIdx >= MAX_PER_KIND) continue;
+      if (trunkIdx >= trunkMax) break;
+
       const [wx, wz] = gridToWorld(t.x, t.y, w, h);
       const groundY = elevationAt(elevation, t.x, t.y);
       const x = wx + t.offsetX;
       const z = wz + t.offsetZ;
-      const trunkH = 1.2 * t.scale;
-      const leavesH = 3.2 * t.scale;
+      const trunkH = (t.kind === 'conifer' ? 1.6 : 1.3) * t.scale;
+      const leanX = Math.sin(x * 1.7 + z * 0.9) * 0.04;
+      const leanZ = Math.cos(x * 1.1 - z * 1.4) * 0.04;
 
-      dummy.position.set(x, groundY + trunkH / 2, z);
+      // Trunk (shared cylinder mesh)
+      dummy.position.set(x, groundY + trunkH / 2 - 0.05, z);
       dummy.scale.set(t.scale * 0.3, trunkH, t.scale * 0.3);
-      dummy.rotation.set(0, 0, 0);
+      dummy.rotation.set(leanX, 0, leanZ);
       dummy.updateMatrix();
-      trunkMesh.setMatrixAt(i, dummy.matrix);
+      trunkMesh.setMatrixAt(trunkIdx, dummy.matrix);
+      trunkIdx++;
 
-      dummy.position.set(x, groundY + trunkH + leavesH / 2, z);
-      dummy.scale.set(t.scale * 1.4, leavesH, t.scale * 1.4);
-      dummy.updateMatrix();
-      leavesMesh.setMatrixAt(i, dummy.matrix);
+      // Color: lower elevation → lush light green, higher → darker
+      const elevFactor = Math.min(1, groundY / (ELEVATION_SCALE * 0.8));
+      const hue = 0.27 - elevFactor * 0.04;
+      const sat = 0.45 + (1 - elevFactor) * 0.25;
+      const light = 0.18 + (1 - elevFactor) * 0.18 + ((i * 13) % 4) * 0.015;
+      const color = new THREE.Color().setHSL(hue, sat, light);
 
-      const greenShade = 0.25 + ((wx + wz) % 1.5) * 0.05;
-      const color = new THREE.Color().setHSL(0.27, 0.55, greenShade);
-      leavesMesh.setColorAt(i, color);
+      if (t.kind === 'conifer') {
+        // Tall, pointy cone canopy
+        const canopyH = 3.4 * t.scale;
+        const canopyR = 1.0 * t.scale;
+        dummy.position.set(x + leanX * 1.2, groundY + trunkH + canopyH / 2, z + leanZ * 1.2);
+        dummy.scale.set(canopyR, canopyH, canopyR);
+        dummy.rotation.set(leanX, (i * 0.37) % (Math.PI * 2), leanZ);
+        dummy.updateMatrix();
+        coneMesh.setMatrixAt(coneIdx, dummy.matrix);
+        coneMesh.setColorAt(coneIdx, color);
+        coneIdx++;
+      } else {
+        // Rounded faceted canopy
+        const canopyR = 1.5 * t.scale;
+        const stretch = 0.85 + ((i * 7) % 5) * 0.06;
+        dummy.position.set(x + leanX * 0.8, groundY + trunkH + canopyR * 0.55, z + leanZ * 0.8);
+        dummy.scale.set(canopyR, canopyR * stretch, canopyR);
+        dummy.rotation.set(leanX, (i * 0.37) % (Math.PI * 2), leanZ);
+        dummy.updateMatrix();
+        ballMesh.setMatrixAt(ballIdx, dummy.matrix);
+        ballMesh.setColorAt(ballIdx, color);
+        ballIdx++;
+      }
     }
+
+    // Hide unused slots
+    for (let i = coneIdx; i < MAX_PER_KIND; i++) coneMesh.setMatrixAt(i, hidden.matrix);
+    for (let i = ballIdx; i < MAX_PER_KIND; i++) ballMesh.setMatrixAt(i, hidden.matrix);
+    for (let i = trunkIdx; i < trunkMax; i++) trunkMesh.setMatrixAt(i, hidden.matrix);
+
     trunkMesh.instanceMatrix.needsUpdate = true;
-    leavesMesh.instanceMatrix.needsUpdate = true;
-    if (leavesMesh.instanceColor) leavesMesh.instanceColor.needsUpdate = true;
-    trunkMesh.count = count;
-    leavesMesh.count = count;
-  }, [count, treeCells, w, h, elevation]);
+    coneMesh.instanceMatrix.needsUpdate = true;
+    ballMesh.instanceMatrix.needsUpdate = true;
+    if (coneMesh.instanceColor) coneMesh.instanceColor.needsUpdate = true;
+    if (ballMesh.instanceColor) ballMesh.instanceColor.needsUpdate = true;
+    trunkMesh.count = trunkIdx;
+    coneMesh.count = coneIdx;
+    ballMesh.count = ballIdx;
+  }, [treeCells, w, h, elevation]);
 
   return (
     <group>
-      <instancedMesh ref={trunkRef} args={[undefined, undefined, 4000]} castShadow>
-        <cylinderGeometry args={[1, 1, 1, 6]} />
+      <instancedMesh ref={trunkRef} args={[undefined, undefined, MAX_PER_KIND * 2]} castShadow>
+        <cylinderGeometry args={[1, 1.1, 1, 6]} />
         <meshStandardMaterial color="#3a2a1f" roughness={0.95} />
       </instancedMesh>
-      <instancedMesh ref={leavesRef} args={[undefined, undefined, 4000]} castShadow>
+      <instancedMesh ref={coneLeavesRef} args={[undefined, undefined, MAX_PER_KIND]} castShadow>
         <coneGeometry args={[1, 1, 8]} />
         <meshStandardMaterial color="#2d5a2a" roughness={0.85} />
+      </instancedMesh>
+      <instancedMesh ref={ballLeavesRef} args={[undefined, undefined, MAX_PER_KIND]} castShadow>
+        <icosahedronGeometry args={[1, 1]} />
+        <meshStandardMaterial color="#3a7036" roughness={0.78} flatShading />
       </instancedMesh>
     </group>
   );

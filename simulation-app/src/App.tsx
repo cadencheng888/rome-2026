@@ -16,11 +16,13 @@ import {
   loadFuelFromImage,
   syntheticElevationMap,
 } from './satelliteLoader';
+import { parseTiff, type TiffTile } from './tiffLoader';
 
 const GRID_W = 120;
-const GRID_H = 90;
+const GRID_H = 104;
 const TICK_MS = 80;
 const NDVI_URL = '/ndvi.png';
+const ELEVATION_URL = '/elevation.png';
 
 const INITIAL_PARAMS: SimParams = {
   windSpeed: 12,
@@ -30,7 +32,7 @@ const INITIAL_PARAMS: SimParams = {
   temperature: 88,
 };
 
-type Source = 'satellite' | 'random';
+type Source = 'satellite' | 'random' | 'upload';
 type ViewMode = '3d' | '2d';
 
 export default function App() {
@@ -43,6 +45,9 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [previousRisk, setPreviousRisk] = useState<number | null>(null);
   const [sceneVersion, setSceneVersion] = useState(0);
+  const [uploadedTile, setUploadedTile] = useState<TiffTile | null>(null);
+  const [uploadName, setUploadName] = useState<string | null>(null);
+  const [isParsingTiff, setIsParsingTiff] = useState(false);
 
   const tickRef = useRef<number | null>(null);
 
@@ -60,9 +65,17 @@ export default function App() {
       return;
     }
 
+    if (source === 'upload') {
+      if (uploadedTile) {
+        setGrid(uploadedTile.grid);
+        setElevation(uploadedTile.elevation);
+      }
+      return;
+    }
+
     Promise.all([
       loadFuelFromImage(NDVI_URL, GRID_W, GRID_H),
-      loadElevationMap(NDVI_URL, GRID_W, GRID_H),
+      loadElevationMap(ELEVATION_URL, GRID_W, GRID_H),
     ])
       .then(([g, e]) => {
         if (!cancelled) {
@@ -84,7 +97,35 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [source]);
+  }, [source, uploadedTile]);
+
+  // Free the previous upload's blob URL whenever a new tile replaces it.
+  useEffect(() => {
+    return () => {
+      if (uploadedTile) URL.revokeObjectURL(uploadedTile.ndviUrl);
+    };
+  }, [uploadedTile]);
+
+  const handleTiffUpload = useCallback(async (file: File) => {
+    setIsParsingTiff(true);
+    setLoadError(null);
+    try {
+      const tile = await parseTiff(file, GRID_W, GRID_H);
+      setUploadedTile(tile);
+      setUploadName(file.name);
+      setSource('upload');
+      setSceneVersion((v) => v + 1);
+    } catch (err) {
+      console.error(err);
+      setLoadError(
+        err instanceof Error
+          ? `Could not parse TIFF: ${err.message}`
+          : 'Could not parse TIFF.'
+      );
+    } finally {
+      setIsParsingTiff(false);
+    }
+  }, []);
 
   const breakdown: RiskBreakdown = grid
     ? calculateRiskBreakdown(grid, params, elevation)
@@ -130,6 +171,8 @@ export default function App() {
     setSceneVersion((v) => v + 1);
     if (source === 'random') {
       setGrid(createGrid({ width: GRID_W, height: GRID_H }));
+    } else if (source === 'upload') {
+      if (uploadedTile) setGrid(uploadedTile.grid);
     } else {
       setGrid(null);
       loadFuelFromImage(NDVI_URL, GRID_W, GRID_H)
@@ -179,6 +222,10 @@ export default function App() {
           setSource={setSource}
           viewMode={viewMode}
           setViewMode={setViewMode}
+          onTiffSelected={handleTiffUpload}
+          uploadName={uploadName}
+          isParsingTiff={isParsingTiff}
+          hasUpload={uploadedTile !== null}
         />
         {loadError && (
           <div
@@ -215,12 +262,17 @@ export default function App() {
                 grid={grid}
                 elevation={elevation}
                 onCellClick={handleClick}
-                ndviTextureUrl={source === 'satellite' ? NDVI_URL : '/ndvi.png'}
+                ndviTextureUrl={
+                  source === 'upload' && uploadedTile
+                    ? uploadedTile.ndviUrl
+                    : NDVI_URL
+                }
+                elevationTextureUrl={source === 'satellite' ? ELEVATION_URL : null}
                 windDirX={params.windDirX}
                 windDirY={params.windDirY}
                 windSpeed={params.windSpeed}
                 sceneKey={`${source}-${sceneVersion}`}
-                useDisplacement={source === 'satellite'}
+                useDisplacement={source === 'satellite' || source === 'upload'}
               />
             ) : (
               <LoadingOverlay />
@@ -272,7 +324,13 @@ export default function App() {
                   grid={grid}
                   onCellClick={handleClick}
                   cellSize={6}
-                  backgroundImageUrl={source === 'satellite' ? NDVI_URL : undefined}
+                  backgroundImageUrl={
+                    source === 'satellite'
+                      ? NDVI_URL
+                      : source === 'upload' && uploadedTile
+                      ? uploadedTile.ndviUrl
+                      : undefined
+                  }
                 />
               ) : (
                 <LoadingOverlay />
@@ -303,12 +361,34 @@ function TopBar({
   setSource,
   viewMode,
   setViewMode,
+  onTiffSelected,
+  uploadName,
+  isParsingTiff,
+  hasUpload,
 }: {
   source: Source;
   setSource: (s: Source) => void;
   viewMode: ViewMode;
   setViewMode: (v: ViewMode) => void;
+  onTiffSelected: (file: File) => void;
+  uploadName: string | null;
+  isParsingTiff: boolean;
+  hasUpload: boolean;
 }) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const sourceOptions: Array<{ value: Source; label: string }> = [
+    { value: 'satellite', label: 'SATELLITE NDVI' },
+    { value: 'random', label: 'RANDOM FOREST' },
+  ];
+  if (hasUpload) {
+    const trimmed =
+      uploadName && uploadName.length > 24
+        ? uploadName.slice(0, 21) + '…'
+        : uploadName ?? 'TIFF';
+    sourceOptions.push({ value: 'upload', label: trimmed.toUpperCase() });
+  }
+
   return (
     <div
       style={{
@@ -321,10 +401,7 @@ function TopBar({
       }}
     >
       <SegmentedControl
-        options={[
-          { value: 'satellite', label: 'SATELLITE NDVI' },
-          { value: 'random', label: 'RANDOM FOREST' },
-        ]}
+        options={sourceOptions}
         value={source}
         onChange={(v) => setSource(v as Source)}
       />
@@ -336,6 +413,34 @@ function TopBar({
         value={viewMode}
         onChange={(v) => setViewMode(v as ViewMode)}
       />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".tif,.tiff,image/tiff"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onTiffSelected(file);
+          e.target.value = '';
+        }}
+      />
+      <button
+        onClick={() => fileInputRef.current?.click()}
+        disabled={isParsingTiff}
+        style={{
+          background: '#0e141b',
+          border: '1px solid #1f2630',
+          color: isParsingTiff ? '#6e7681' : '#cdd9e8',
+          padding: '8px 14px',
+          fontSize: 12,
+          fontWeight: 600,
+          letterSpacing: 1,
+          borderRadius: 8,
+          cursor: isParsingTiff ? 'wait' : 'pointer',
+        }}
+      >
+        {isParsingTiff ? 'PARSING…' : hasUpload ? 'REPLACE TIFF' : 'UPLOAD TIFF'}
+      </button>
     </div>
   );
 }

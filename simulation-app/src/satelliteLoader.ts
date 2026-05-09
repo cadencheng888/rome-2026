@@ -18,19 +18,26 @@ export async function loadFuelFromImage(
   gridW: number,
   gridH: number
 ): Promise<Grid> {
-  const img = await loadImage(url);
+  const data = await loadImageData(url);
+  return gridFromImageData(data, gridW, gridH);
+}
 
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Could not get 2D canvas context');
-  ctx.drawImage(img, 0, 0);
-
-  const { data } = ctx.getImageData(0, 0, img.width, img.height);
-
-  const blockW = img.width / gridW;
-  const blockH = img.height / gridH;
+/**
+ * Reduces an NDVI-colorized ImageData buffer to a fire-engine Grid by
+ * averaging the source pixels covered by each grid cell.
+ *
+ * Shared by the URL path (PNG in /public) and the in-app upload path
+ * (canvas painted from a parsed GeoTIFF), so they always agree on what
+ * counts as fuel, water, and no-data.
+ */
+export function gridFromImageData(
+  imgData: ImageData,
+  gridW: number,
+  gridH: number
+): Grid {
+  const { data, width: imgW, height: imgH } = imgData;
+  const blockW = imgW / gridW;
+  const blockH = imgH / gridH;
 
   const grid: Grid = [];
   for (let gy = 0; gy < gridH; gy++) {
@@ -48,7 +55,7 @@ export async function loadFuelFromImage(
 
       for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
-          const idx = (y * img.width + x) * 4;
+          const idx = (y * imgW + x) * 4;
           const r = data[idx];
           const g = data[idx + 1];
           const b = data[idx + 2];
@@ -104,6 +111,17 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+async function loadImageData(url: string): Promise<ImageData> {
+  const img = await loadImage(url);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get 2D canvas context');
+  ctx.drawImage(img, 0, 0);
+  return ctx.getImageData(0, 0, img.width, img.height);
+}
+
 /**
  * Loads an image and returns a normalized elevation grid (0-1 per cell)
  * using the red channel as the height signal. Bright pixels = high elevation.
@@ -116,17 +134,22 @@ export async function loadElevationMap(
   gridW: number,
   gridH: number
 ): Promise<number[][]> {
-  const img = await loadImage(url);
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Could not get 2D canvas context');
-  ctx.drawImage(img, 0, 0);
-  const { data } = ctx.getImageData(0, 0, img.width, img.height);
+  const data = await loadImageData(url);
+  return elevationFromImageData(data, gridW, gridH);
+}
 
-  const blockW = img.width / gridW;
-  const blockH = img.height / gridH;
+/**
+ * Reduces a grayscale-elevation ImageData buffer to a normalized (0-1) grid
+ * by averaging the red channel of the source pixels each grid cell covers.
+ */
+export function elevationFromImageData(
+  imgData: ImageData,
+  gridW: number,
+  gridH: number
+): number[][] {
+  const { data, width: imgW } = imgData;
+  const blockW = imgW / gridW;
+  const blockH = imgData.height / gridH;
   const result: number[][] = [];
 
   for (let gy = 0; gy < gridH; gy++) {
@@ -136,15 +159,16 @@ export async function loadElevationMap(
       const y0 = Math.floor(gy * blockH);
       const x1 = Math.floor((gx + 1) * blockW);
       const y1 = Math.floor((gy + 1) * blockH);
-      let sum = 0, n = 0;
+      let sum = 0,
+        n = 0;
       for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
-          const idx = (y * img.width + x) * 4;
+          const idx = (y * imgW + x) * 4;
           sum += data[idx];
           n++;
         }
       }
-      row.push(n > 0 ? (sum / n) / 255 : 0);
+      row.push(n > 0 ? sum / n / 255 : 0);
     }
     result.push(row);
   }
@@ -176,29 +200,17 @@ function isWater(r: number, g: number, b: number): boolean {
 }
 
 /**
- * Maps an NDVI palette color to a fuel value 0-100.
- * Uses a combination of green dominance and overall hue position.
+ * Maps an NDVI palette color to a fuel value 0-100. The fire-risk palette
+ * (see NDVI_RAMP in tiffLoader.ts / scripts/tiff_to_png.py) goes
+ * green → yellow → orange → red as NDVI rises, so projecting the color onto
+ * the red-green axis recovers the underlying fuel: red dominance → forest /
+ * high fuel, green dominance → bare / low fuel.
  */
 function colorToFuel(r: number, g: number, b: number): number {
   if (r > 235 && g > 235 && b > 235) return 8;
   if (r < 8 && g < 8 && b < 8) return 5;
 
-  const greenDominance = (g - Math.max(r, b)) / 255;
-  if (greenDominance > 0.05) {
-    const intensity = g / 255;
-    return Math.min(100, 55 + greenDominance * 200 + intensity * 20);
-  }
-
-  const yellowness = (Math.min(r, g) - b) / 255;
-  if (yellowness > 0.1 && Math.abs(r - g) < 80) {
-    return Math.min(80, 35 + yellowness * 120);
-  }
-
-  if (r > g + 15) {
-    const redness = (r - g) / 255;
-    return Math.max(8, 35 - redness * 60);
-  }
-
-  const luminance = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
-  return 10 + luminance * 25;
+  const denom = Math.max(r + g, 1);
+  const axis = (r - g) / denom; // ~ -1 (pure green) … +1 (pure red)
+  return Math.max(5, Math.min(100, 50 + axis * 80));
 }
