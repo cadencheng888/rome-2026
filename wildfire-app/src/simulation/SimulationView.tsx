@@ -5,11 +5,12 @@ import {
   ignite,
   igniteCluster,
   isAnyBurning,
+  placeSettlements,
   runControlledBurn,
   step,
   stepControlled,
 } from "./fireEngine";
-import type { Grid, RiskBreakdown, SimParams } from "./fireEngine";
+import type { Grid, RiskBreakdown, SimParams, Settlement } from "./fireEngine";
 import { FireCanvas } from "./components/FireCanvas";
 import { FireScene3D } from "./components/FireScene3D";
 import { ControlPanel } from "./components/ControlPanel";
@@ -141,6 +142,78 @@ function gridStats(grid: Grid) {
   return { burning, burned, total };
 }
 
+// ── Water detection ───────────────────────────────────────────────────────────
+// Samples the NDVI texture (already rendered by parseTiff) to detect water
+// cells without touching satelliteLoader. Each grid cell's block of pixels is
+// averaged; if blue dominates it's flagged water: true. This matches the same
+// blue palette the NDVI ramp assigns to NDVI < -0.1.
+
+async function flagWaterCells(
+  grid: Grid,
+  ndviUrl: string,
+  gridW: number,
+  gridH: number
+): Promise<Grid> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(grid);
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const {
+        data,
+        width: iw,
+        height: ih,
+      } = ctx.getImageData(0, 0, img.width, img.height);
+
+      const blockW = iw / gridW;
+      const blockH = ih / gridH;
+
+      const next = grid.map((row, gy) =>
+        row.map((cell, gx) => {
+          const x0 = Math.floor(gx * blockW);
+          const y0 = Math.floor(gy * blockH);
+          const x1 = Math.min(iw, Math.floor((gx + 1) * blockW));
+          const y1 = Math.min(ih, Math.floor((gy + 1) * blockH));
+
+          let rSum = 0,
+            gSum = 0,
+            bSum = 0,
+            n = 0;
+          for (let py = y0; py < y1; py++) {
+            for (let px = x0; px < x1; px++) {
+              const i = (py * iw + px) * 4;
+              if (data[i + 3] < 32) continue; // skip transparent
+              rSum += data[i];
+              gSum += data[i + 1];
+              bSum += data[i + 2];
+              n++;
+            }
+          }
+          if (n === 0) return cell;
+
+          const r = rSum / n,
+            g = gSum / n,
+            b = bSum / n;
+          // Matches the NDVI ramp: water is deep blue (#0f3782) through
+          // grey-blue (#505a64) for NDVI values below ~-0.05.
+          const isWater = b > r + 20 && b > g + 15 && b > 70;
+          return isWater ? { ...cell, water: true } : cell;
+        })
+      );
+      resolve(next);
+    };
+    img.onerror = () => resolve(grid); // silently skip on error
+    img.src = ndviUrl;
+  });
+}
+
 // ── component ────────────────────────────────────────────────────────────────
 
 export default function SimulationView({
@@ -162,6 +235,7 @@ export default function SimulationView({
   const [activeTiffUrl, setActiveTiffUrl] = useState<string | null>(null);
   const [liveStats, setLiveStats] = useState<LiveStats | null>(null);
   const [summary, setSummary] = useState<SimSummary | null>(null);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
 
   const tickRef = useRef<number | null>(null);
   const snuffRef = useRef<number | null>(null);
@@ -248,8 +322,17 @@ export default function SimulationView({
           URL.revokeObjectURL(tile.ndviUrl);
           return;
         }
+        const waterFlagged = await flagWaterCells(
+          tile.grid,
+          tile.ndviUrl,
+          GRID_W,
+          GRID_H
+        );
+        const { grid: gridWithSettlements, settlements: placed } =
+          placeSettlements(waterFlagged);
         setActiveTiffUrl(tile.ndviUrl);
-        setGrid(tile.grid);
+        setGrid(gridWithSettlements);
+        setSettlements(placed);
         setElevation(tile.elevation);
         setSceneVersion((v) => v + 1);
       })
@@ -375,7 +458,16 @@ export default function SimulationView({
           tiffPath.split("/").pop() ?? "region.tiff"
         );
         const tile = await parseTiff(file, GRID_W, GRID_H);
-        setGrid(tile.grid);
+        const waterFlagged = await flagWaterCells(
+          tile.grid,
+          tile.ndviUrl,
+          GRID_W,
+          GRID_H
+        );
+        const { grid: gridWithSettlements, settlements: placed } =
+          placeSettlements(waterFlagged);
+        setGrid(gridWithSettlements);
+        setSettlements(placed);
         setActiveTiffUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return tile.ndviUrl;

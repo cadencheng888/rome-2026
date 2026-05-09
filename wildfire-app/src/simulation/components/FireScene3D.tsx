@@ -87,6 +87,7 @@ export function FireScene3D({
           windSpeed={windSpeed}
         />
         <Trees grid={grid} elevation={smoothed} sceneKey={sceneKey} />
+        <Buildings grid={grid} elevation={smoothed} sceneKey={sceneKey} />
 
         <OrbitControls
           minDistance={40}
@@ -203,12 +204,10 @@ function GridFloor({ planeH }: { planeH: number }) {
   const divisions = 80;
   return (
     <group position={[0, -2.2, 0]}>
-      {/* Dark backdrop plane that the grid sits on top of */}
       <mesh rotation-x={-Math.PI / 2} position={[0, -0.05, 0]}>
         <planeGeometry args={[size, size]} />
         <meshBasicMaterial color="#070d1a" />
       </mesh>
-      {/* Soft radial glow under the terrain */}
       <mesh rotation-x={-Math.PI / 2} position={[0, 0.02, 0]}>
         <circleGeometry args={[Math.max(PLANE_SIZE, planeH) * 0.9, 64]} />
         <meshBasicMaterial
@@ -218,12 +217,10 @@ function GridFloor({ planeH }: { planeH: number }) {
           depthWrite={false}
         />
       </mesh>
-      {/* Bright primary grid */}
       <gridHelper
         args={[size, divisions, "#3a6fb0", "#1a2c4a"]}
         position={[0, 0.03, 0]}
       />
-      {/* Wider accent grid every 5 cells for a "data tile" feel */}
       <gridHelper
         args={[size, divisions / 5, "#5d9bd6", "#2a4674"]}
         position={[0, 0.04, 0]}
@@ -246,11 +243,10 @@ function HorizonHaze() {
       fragmentShader: `
         varying float vY;
         void main() {
-          // y ranges over the cylinder height; normalize 0..1
           float t = clamp((vY + 60.0) / 160.0, 0.0, 1.0);
-          vec3 warm   = vec3(0.95, 0.45, 0.18); // golden-hour orange
-          vec3 mid    = vec3(0.42, 0.22, 0.45); // dusk purple
-          vec3 cool   = vec3(0.05, 0.09, 0.18); // deep navy
+          vec3 warm   = vec3(0.95, 0.45, 0.18);
+          vec3 mid    = vec3(0.42, 0.22, 0.45);
+          vec3 cool   = vec3(0.05, 0.09, 0.18);
           vec3 col = mix(warm, mid, smoothstep(0.0, 0.45, t));
           col      = mix(col,  cool, smoothstep(0.45, 1.0, t));
           float alpha = smoothstep(1.0, 0.15, t) * 0.85;
@@ -316,7 +312,6 @@ function Terrain({
   const h = grid.length;
   const planeH = (PLANE_SIZE * h) / w;
 
-  // GPU and JS sample the SAME smoothed array → tree feet line up with terrain.
   const displacementTexture = useMemo(
     () => buildElevationTexture(elevation),
     [elevation]
@@ -396,7 +391,13 @@ function useBurnOverlay(grid: Grid): THREE.Texture | null {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const cell = grid[y][x];
-      if (cell.status === "burned") {
+      if (cell.water) {
+        ctx.fillStyle = "rgba(26, 90, 160, 0.72)";
+        ctx.fillRect(x, y, 1, 1);
+      } else if (
+        cell.status === "burned" ||
+        cell.status === "residential_destroyed"
+      ) {
         ctx.fillStyle = "rgba(20, 12, 8, 0.92)";
         ctx.fillRect(x, y, 1, 1);
       } else if (cell.status === "firebreak") {
@@ -426,8 +427,12 @@ function Fire({ grid, elevation }: { grid: Grid; elevation: number[][] }) {
     const arr: Array<{ x: number; y: number; heat: number }> = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        if (grid[y][x].status === "burning") {
-          arr.push({ x, y, heat: grid[y][x].heat });
+        const cell = grid[y][x];
+        if (
+          cell.status === "burning" ||
+          cell.status === "residential_burning"
+        ) {
+          arr.push({ x, y, heat: cell.heat });
         }
       }
     }
@@ -460,7 +465,13 @@ function Fire({ grid, elevation }: { grid: Grid; elevation: number[][] }) {
       mesh.setMatrixAt(i, dummy.matrix);
 
       const color = new THREE.Color();
-      color.setHSL(0.05 + heat * 0.08, 1, 0.55 + flicker * 0.15);
+      // Residential fires burn hotter — shift toward white-orange
+      const isResidential = grid[y][x].status === "residential_burning";
+      color.setHSL(
+        isResidential ? 0.07 + heat * 0.04 : 0.05 + heat * 0.08,
+        1,
+        isResidential ? 0.65 + flicker * 0.2 : 0.55 + flicker * 0.15
+      );
       mesh.setColorAt(i, color);
     }
 
@@ -527,7 +538,9 @@ function Smoke({
     const arr: Array<{ x: number; y: number }> = [];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        if (grid[y][x].status === "burning") arr.push({ x, y });
+        const cell = grid[y][x];
+        if (cell.status === "burning" || cell.status === "residential_burning")
+          arr.push({ x, y });
       }
     }
     return arr;
@@ -630,9 +643,13 @@ function Trees({
       for (let x = 0; x < w; x++) {
         const cell = snapshot[y]?.[x];
         if (!cell) continue;
-        if (cell.fuel > 55 && cell.status !== "firebreak") {
+        if (
+          cell.fuel > 55 &&
+          cell.status !== "firebreak" &&
+          !cell.residential &&
+          !cell.water
+        ) {
           if (rand() < 0.45) {
-            // Cell elevation determines mix: high = mostly conifer, low = mostly broadleaf
             const elevFrac = Math.min(1, elevation[y]?.[x] ?? 0);
             const coniferChance = 0.35 + elevFrac * 0.5;
             const kind: TreeKind =
@@ -685,7 +702,6 @@ function Trees({
       const leanX = Math.sin(x * 1.7 + z * 0.9) * 0.04;
       const leanZ = Math.cos(x * 1.1 - z * 1.4) * 0.04;
 
-      // Trunk (shared cylinder mesh)
       dummy.position.set(x, groundY + trunkH / 2 - 0.05, z);
       dummy.scale.set(t.scale * 0.3, trunkH, t.scale * 0.3);
       dummy.rotation.set(leanX, 0, leanZ);
@@ -693,7 +709,6 @@ function Trees({
       trunkMesh.setMatrixAt(trunkIdx, dummy.matrix);
       trunkIdx++;
 
-      // Color: lower elevation → lush light green, higher → darker
       const elevFactor = Math.min(1, groundY / (ELEVATION_SCALE * 0.8));
       const hue = 0.27 - elevFactor * 0.04;
       const sat = 0.45 + (1 - elevFactor) * 0.25;
@@ -701,7 +716,6 @@ function Trees({
       const color = new THREE.Color().setHSL(hue, sat, light);
 
       if (t.kind === "conifer") {
-        // Tall, pointy cone canopy
         const canopyH = 3.4 * t.scale;
         const canopyR = 1.0 * t.scale;
         dummy.position.set(
@@ -716,7 +730,6 @@ function Trees({
         coneMesh.setColorAt(coneIdx, color);
         coneIdx++;
       } else {
-        // Rounded faceted canopy
         const canopyR = 1.5 * t.scale;
         const stretch = 0.85 + ((i * 7) % 5) * 0.06;
         dummy.position.set(
@@ -733,7 +746,6 @@ function Trees({
       }
     }
 
-    // Hide unused slots
     for (let i = coneIdx; i < MAX_PER_KIND; i++)
       coneMesh.setMatrixAt(i, hidden.matrix);
     for (let i = ballIdx; i < MAX_PER_KIND; i++)
@@ -776,6 +788,300 @@ function Trees({
       >
         <icosahedronGeometry args={[1, 1]} />
         <meshStandardMaterial color="#3a7036" roughness={0.78} flatShading />
+      </instancedMesh>
+    </group>
+  );
+}
+
+// ── Buildings ─────────────────────────────────────────────────────────────────
+// Three instanced meshes per state:
+//   wallsRef      → box body (intact, burning, destroyed share one mesh, color-coded)
+//   roofRef       → triangular prism ridge roof (intact + burning only)
+//   ruinsRef      → flat rubble slab shown when destroyed
+//
+// Each residential cell gets one wall + one roof instance (or one ruin instance).
+// Colors update every frame so burning glow animates; structure/ruin swap on status change.
+
+const MAX_BUILDINGS = 512; // well above the ~50 cells placeSettlements stamps
+
+interface BuildingEntry {
+  x: number;
+  y: number;
+  // deterministic per-cell variation
+  rotation: number; // Y rotation so not every house faces the same way
+  scaleX: number; // footprint width  (0.8 – 1.2 × cell)
+  scaleZ: number; // footprint depth
+  wallH: number; // wall height
+  roofH: number; // ridge height above walls
+}
+
+function Buildings({
+  grid,
+  elevation,
+  sceneKey,
+}: {
+  grid: Grid;
+  elevation: number[][];
+  sceneKey: string;
+}) {
+  const wallsRef = useRef<THREE.InstancedMesh>(null!);
+  const roofRef = useRef<THREE.InstancedMesh>(null!);
+  const ruinsRef = useRef<THREE.InstancedMesh>(null!);
+
+  const w = grid[0]?.length ?? 0;
+  const h = grid.length;
+
+  // Derive the building list once per scene load (same key logic as Trees)
+  const lastKeyRef = useRef("");
+  const entriesRef = useRef<BuildingEntry[]>([]);
+
+  if (lastKeyRef.current !== sceneKey) {
+    lastKeyRef.current = sceneKey;
+    const entries: BuildingEntry[] = [];
+    let seed = 42;
+    const rand = () => {
+      seed = (seed * 9301 + 49297) % 233280;
+      return seed / 233280;
+    };
+    for (let gy = 0; gy < h; gy++) {
+      for (let gx = 0; gx < w; gx++) {
+        if (grid[gy]?.[gx]?.residential && !grid[gy]?.[gx]?.water) {
+          entries.push({
+            x: gx,
+            y: gy,
+            rotation: rand() * Math.PI * 2,
+            scaleX: 0.75 + rand() * 0.35,
+            scaleZ: 0.75 + rand() * 0.35,
+            wallH: 1.4 + rand() * 0.8,
+            roofH: 0.7 + rand() * 0.5,
+          });
+        }
+      }
+    }
+    entriesRef.current = entries;
+  }
+
+  // Roof geometry: a triangular prism lying on its side (ridge runs along Z).
+  // We build it once as a BufferGeometry so we can scale instances freely.
+  const roofGeo = useMemo(() => {
+    // 6 vertices: two triangles (front + back face) + 3 quads for the sides
+    const geo = new THREE.BufferGeometry();
+    // Prism: width 1 (X), height 1 (Y), depth 1 (Z)
+    // Ridge at top centre (0, 0.5, ±0.5), eaves at (±0.5, -0.5, ±0.5)
+    const v = new Float32Array([
+      // front triangle (z = -0.5)
+      -0.5, -0.5, -0.5, 0.5, -0.5, -0.5, 0.0, 0.5, -0.5,
+      // back triangle (z = +0.5)
+      -0.5, -0.5, 0.5, 0.0, 0.5, 0.5, 0.5, -0.5, 0.5,
+      // left slope: (-0.5,-0.5,-0.5), (0,0.5,-0.5), (0,0.5,0.5), (-0.5,-0.5,0.5)
+      -0.5,
+      -0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, -0.5, -0.5, 0.5,
+      // right slope: (0.5,-0.5,-0.5), (0.5,-0.5,0.5), (0,0.5,0.5), (0,0.5,-0.5)
+      0.5, -0.5, -0.5, 0.5, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5, -0.5,
+      // bottom (not visible, skip for perf)
+    ]);
+    const idx = new Uint16Array([
+      0,
+      1,
+      2, // front
+      3,
+      4,
+      5, // back
+      6,
+      7,
+      8,
+      6,
+      8,
+      9, // left slope
+      10,
+      11,
+      12,
+      10,
+      12,
+      13, // right slope
+    ]);
+    geo.setAttribute("position", new THREE.BufferAttribute(v, 3));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.computeVertexNormals();
+    return geo;
+  }, []);
+
+  // Per-frame update: colours animate when burning, meshes swap on status change
+  useFrame(({ clock }) => {
+    const walls = wallsRef.current;
+    const roof = roofRef.current;
+    const ruins = ruinsRef.current;
+    if (!walls || !roof || !ruins) return;
+
+    const entries = entriesRef.current;
+    const t = clock.getElapsedTime();
+    const dummy = new THREE.Object3D();
+    const HIDDEN_Y = -10000;
+
+    const wallColor = new THREE.Color();
+    const roofColor = new THREE.Color();
+    const ruinColor = new THREE.Color();
+
+    let wi = 0; // wall/roof index
+    let ri = 0; // ruin index
+
+    for (
+      let i = 0;
+      i < entries.length && wi < MAX_BUILDINGS && ri < MAX_BUILDINGS;
+      i++
+    ) {
+      const { x, y, rotation, scaleX, scaleZ, wallH, roofH } = entries[i];
+      const cell = grid[y]?.[x];
+      if (!cell) continue;
+
+      const [wx, wz] = gridToWorld(x, y, w, h);
+      const groundY = elevationAt(elevation, x, y);
+
+      // Cell width in world units
+      const cellW = PLANE_SIZE / w;
+      const cellD = (PLANE_SIZE * h) / w / h;
+      const bw = cellW * scaleX;
+      const bd = cellD * scaleZ;
+
+      const status = cell.status;
+      const isDestroyed = status === "residential_destroyed";
+      const isBurning = status === "residential_burning";
+
+      if (isDestroyed) {
+        // Show a flat charred rubble slab; hide wall + roof
+        dummy.position.set(wx, groundY + 0.08, wz);
+        dummy.rotation.set(0, rotation, 0);
+        dummy.scale.set(bw * 0.95, 0.16, bd * 0.95);
+        dummy.updateMatrix();
+        ruins.setMatrixAt(ri, dummy.matrix);
+        ruinColor.set("#1a0e0a");
+        ruins.setColorAt(ri, ruinColor);
+        ri++;
+
+        // Park wall + roof out of view
+        dummy.position.set(0, HIDDEN_Y, 0);
+        dummy.scale.set(0, 0, 0);
+        dummy.updateMatrix();
+        walls.setMatrixAt(wi, dummy.matrix);
+        roof.setMatrixAt(wi, dummy.matrix);
+        wi++;
+      } else {
+        // Wall box
+        dummy.position.set(wx, groundY + wallH / 2, wz);
+        dummy.rotation.set(0, rotation, 0);
+        dummy.scale.set(bw, wallH, bd);
+        dummy.updateMatrix();
+        walls.setMatrixAt(wi, dummy.matrix);
+
+        // Roof prism — sits on top of the wall box, oriented along Z of the building
+        dummy.position.set(wx, groundY + wallH + roofH * 0.42, wz);
+        dummy.rotation.set(0, rotation, 0);
+        dummy.scale.set(bw * 1.08, roofH, bd * 1.04);
+        dummy.updateMatrix();
+        roof.setMatrixAt(wi, dummy.matrix);
+
+        if (isBurning) {
+          const flicker =
+            0.5 +
+            Math.sin(t * 14 + i * 1.7) * 0.3 +
+            Math.cos(t * 9 + i * 0.9) * 0.2;
+          // Walls: deep orange-red, pulsing
+          wallColor.setHSL(0.04 + flicker * 0.03, 1.0, 0.28 + flicker * 0.18);
+          walls.setColorAt(wi, wallColor);
+          // Roof: brighter, more yellow
+          roofColor.setHSL(0.08 + flicker * 0.04, 0.95, 0.45 + flicker * 0.2);
+          roof.setColorAt(wi, roofColor);
+        } else {
+          // Intact: warm cream walls, terracotta/slate roof
+          // Vary slightly per building so the town doesn't look uniform
+          const hueShift = ((i * 17) % 7) * 0.005;
+          wallColor.setHSL(0.09 + hueShift, 0.22, 0.78);
+          roofColor.setHSL(0.04 + hueShift, 0.58, 0.38);
+          walls.setColorAt(wi, wallColor);
+          roof.setColorAt(wi, roofColor);
+        }
+
+        // No ruin for this slot
+        dummy.position.set(0, HIDDEN_Y, 0);
+        dummy.scale.set(0, 0, 0);
+        dummy.updateMatrix();
+        ruins.setMatrixAt(ri, dummy.matrix);
+        ri++;
+
+        wi++;
+      }
+    }
+
+    // Hide unused slots
+    const hiddenDummy = new THREE.Object3D();
+    hiddenDummy.position.set(0, HIDDEN_Y, 0);
+    hiddenDummy.scale.set(0, 0, 0);
+    hiddenDummy.updateMatrix();
+    for (let i = wi; i < MAX_BUILDINGS; i++) {
+      walls.setMatrixAt(i, hiddenDummy.matrix);
+      roof.setMatrixAt(i, hiddenDummy.matrix);
+    }
+    for (let i = ri; i < MAX_BUILDINGS; i++) {
+      ruins.setMatrixAt(i, hiddenDummy.matrix);
+    }
+
+    walls.instanceMatrix.needsUpdate = true;
+    roof.instanceMatrix.needsUpdate = true;
+    ruins.instanceMatrix.needsUpdate = true;
+    if (walls.instanceColor) walls.instanceColor.needsUpdate = true;
+    if (roof.instanceColor) roof.instanceColor.needsUpdate = true;
+    if (ruins.instanceColor) ruins.instanceColor.needsUpdate = true;
+  });
+
+  return (
+    <group>
+      {/* Walls */}
+      <instancedMesh
+        ref={wallsRef}
+        args={[undefined, undefined, MAX_BUILDINGS]}
+        castShadow
+        receiveShadow
+        frustumCulled={false}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial
+          color="#d4c4a0"
+          roughness={0.75}
+          metalness={0.02}
+        />
+      </instancedMesh>
+
+      {/* Pitched roofs */}
+      <instancedMesh
+        ref={roofRef}
+        args={[undefined, undefined, MAX_BUILDINGS]}
+        geometry={roofGeo}
+        castShadow
+        frustumCulled={false}
+      >
+        <meshStandardMaterial
+          color="#7a3a22"
+          roughness={0.82}
+          metalness={0.0}
+        />
+      </instancedMesh>
+
+      {/* Charred rubble slabs */}
+      <instancedMesh
+        ref={ruinsRef}
+        args={[undefined, undefined, MAX_BUILDINGS]}
+        castShadow
+        receiveShadow
+        frustumCulled={false}
+      >
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial
+          color="#1a0e0a"
+          roughness={0.95}
+          metalness={0.0}
+          emissive="#3a1008"
+          emissiveIntensity={0.3}
+        />
       </instancedMesh>
     </group>
   );

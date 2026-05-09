@@ -1,12 +1,19 @@
-export type CellStatus = "unburned" | "burning" | "burned" | "firebreak";
+export type CellStatus =
+  | "unburned"
+  | "burning"
+  | "burned"
+  | "firebreak"
+  | "residential"
+  | "residential_burning"
+  | "residential_destroyed";
 
 export interface Cell {
   fuel: number;
-  moisture: number; // 0 = dry, 1 = wet — from NDMI band
-  slope: number; // degrees, from TIFF slope band (0 if unavailable)
-  aspect: number; // degrees 0–360 (0=N,90=E,180=S,270=W), from TIFF aspect band
+  moisture: number;
   status: CellStatus;
   heat: number;
+  residential?: boolean;
+  water?: boolean;
 }
 
 export type Grid = Cell[][];
@@ -37,8 +44,6 @@ export function createGrid(opts: GridOptions): Grid {
       row.push({
         fuel: hasFuel ? 60 + Math.random() * 40 : 0,
         moisture: 0,
-        slope: 0,
-        aspect: 0,
         status: isBreak ? "firebreak" : "unburned",
         heat: 0,
       });
@@ -55,8 +60,12 @@ export function cloneGrid(grid: Grid): Grid {
 export function ignite(grid: Grid, x: number, y: number): Grid {
   if (y < 0 || y >= grid.length || x < 0 || x >= grid[0].length) return grid;
   const next = cloneGrid(grid);
-  if (next[y][x].status === "unburned" && next[y][x].fuel > 0) {
+  const cell = next[y][x];
+  if (cell.status === "unburned" && cell.fuel > 0) {
     next[y][x].status = "burning";
+    next[y][x].heat = 1;
+  } else if (cell.status === "residential") {
+    next[y][x].status = "residential_burning";
     next[y][x].heat = 1;
   }
   return next;
@@ -76,8 +85,12 @@ export function igniteCluster(
       const ny = y + dy;
       if (ny < 0 || ny >= next.length || nx < 0 || nx >= next[0].length)
         continue;
-      if (next[ny][nx].status === "unburned" && next[ny][nx].fuel > 0) {
+      const cell = next[ny][nx];
+      if (cell.status === "unburned" && cell.fuel > 0) {
         next[ny][nx].status = "burning";
+        next[ny][nx].heat = 0.7 + Math.random() * 0.3;
+      } else if (cell.status === "residential") {
+        next[ny][nx].status = "residential_burning";
         next[ny][nx].heat = 0.7 + Math.random() * 0.3;
       }
     }
@@ -96,55 +109,10 @@ const NEIGHBORS: Array<[number, number]> = [
   [1, 1],
 ];
 
-/**
- * Converts a slope in degrees and an aspect in degrees (0=N, 90=E, 180=S, 270=W)
- * into an elevation boost multiplier for fire spread from (x,y) toward (nx,ny).
- *
- * This replaces the old raw-elevation-delta approach, which conflated gentle
- * slopes with cliffs and produced boost values that varied with grid resolution.
- * Using the TIFF's actual slope band (in degrees) gives a physically meaningful,
- * resolution-independent result.
- *
- * The aspect tells us which direction the slope faces. We compute how much of
- * the spread direction aligns with the downslope direction; upslope spread
- * is boosted, downslope is penalized.
- */
-function slopeBoost(
-  slopeDeg: number,
-  aspectDeg: number,
-  dx: number,
-  dy: number
-): number {
-  if (slopeDeg < 0.5) return 1.0; // effectively flat
-
-  // Aspect convention: 0=N, 90=E → convert to unit vector pointing downslope.
-  // In image/grid space: +y is south, +x is east.
-  const aspectRad = (aspectDeg * Math.PI) / 180;
-  const downX = Math.sin(aspectRad); // east component of downslope
-  const downY = Math.cos(aspectRad); // south component of downslope
-
-  // Spread direction vector (not normalized for diagonals — intentional;
-  // diagonal spread already travels farther, so we keep consistent units).
-  const len = Math.sqrt(dx * dx + dy * dy);
-  const spreadX = dx / len;
-  const spreadY = dy / len;
-
-  // Alignment: +1 = spreading directly upslope (fire accelerates),
-  //            -1 = spreading directly downslope (fire decelerates).
-  const alignment = spreadX * downX + spreadY * downY;
-
-  // Slope factor: Rothermel-style. A 30° slope roughly doubles spread rate.
-  // alignment=+1 (upslope) → full boost, alignment=-1 (downslope) → penalty.
-  const slopeFactor = Math.tan((slopeDeg * Math.PI) / 180);
-  const boost = 1.0 + alignment * slopeFactor * 3.5;
-  return Math.max(0.3, boost);
-}
-
 export function step(
   grid: Grid,
   params: SimParams,
-  // elevation kept for API compatibility but slope/aspect from Cell are preferred
-  _elevation?: number[][] | null
+  elevation?: number[][] | null
 ): Grid {
   const next = cloneGrid(grid);
   const h = grid.length;
@@ -156,14 +124,20 @@ export function step(
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const cell = grid[y][x];
-      if (cell.status !== "burning") continue;
+      const isBurning =
+        cell.status === "burning" || cell.status === "residential_burning";
+      if (!isBurning) continue;
 
-      const consume = 0.05 + cell.heat * 0.03;
+      // Residential burns slower (more fuel, structure takes longer) but intensely
+      const burnRate = cell.residential ? 0.025 : 0.05;
+      const consume = burnRate + cell.heat * 0.03;
       next[y][x].fuel = Math.max(0, cell.fuel - consume * 100);
       next[y][x].heat = Math.max(0, cell.heat - 0.04);
 
       if (next[y][x].fuel <= 0 || next[y][x].heat <= 0) {
-        next[y][x].status = "burned";
+        next[y][x].status = cell.residential
+          ? "residential_destroyed"
+          : "burned";
         next[y][x].heat = 0;
       }
 
@@ -173,24 +147,36 @@ export function step(
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
 
         const neighbor = grid[ny][nx];
-        if (neighbor.status !== "unburned" || neighbor.fuel <= 0) continue;
+        const neighborIgnitable =
+          (neighbor.status === "unburned" && neighbor.fuel > 0) ||
+          neighbor.status === "residential";
+        if (!neighborIgnitable) continue;
 
-        // Wind: boost spread in wind direction.
         const windAlignment = dx * params.windDirX + dy * params.windDirY;
         const windBoost = Math.max(0, windAlignment) * (params.windSpeed / 30);
 
-        // Slope: use the burning cell's slope/aspect to determine uphill/downhill.
-        // (The source cell's slope is what drives fire behavior.)
-        const elevBoost = slopeBoost(cell.slope, cell.aspect, dx, dy);
+        let elevBoost = 1.0;
+        if (elevation) {
+          const dElev = (elevation[ny]?.[nx] ?? 0) - (elevation[y]?.[x] ?? 0);
+          elevBoost =
+            dElev > 0 ? 1 + dElev * 5 : Math.max(0.4, 1 + dElev * 1.5);
+        }
 
-        // Moisture: wet cells resist ignition (NDMI-driven).
         const dryness = 1 - neighbor.moisture * 0.75;
         const fuelFactor = neighbor.fuel / 100;
-        const baseProb = 0.08 * fuelFactor * tempFactor * humidityFactor;
+        // Residential cells are slightly harder to ignite from outside (ember-resistant roofing etc)
+        // but once a neighbor is burning the heat is intense
+        const residentialFactor = neighbor.residential ? 0.7 : 1.0;
+        const baseProb =
+          0.08 * fuelFactor * tempFactor * humidityFactor * residentialFactor;
         const prob = baseProb * (1 + windBoost * 2.0) * elevBoost * dryness;
 
         if (Math.random() < prob) {
-          next[ny][nx].status = "burning";
+          if (neighbor.status === "residential") {
+            next[ny][nx].status = "residential_burning";
+          } else {
+            next[ny][nx].status = "burning";
+          }
           next[ny][nx].heat = 1;
         }
       }
@@ -200,9 +186,96 @@ export function step(
   return next;
 }
 
-// ---------------------------------------------------------------------------
-// Risk scoring
-// ---------------------------------------------------------------------------
+export function stepControlled(
+  grid: Grid,
+  params: SimParams,
+  elevation?: number[][] | null
+): Grid {
+  const next = cloneGrid(grid);
+  const h = grid.length;
+  const w = grid[0].length;
+
+  const BURNOUT_RATE = 0.018;
+  const HEAT_DECAY = 0.025;
+  const SPREAD_SUPPRESSION = 0.55;
+
+  const humidityFactor = 1 - params.humidity / 100;
+  const tempFactor = Math.max(0.2, params.temperature / 100);
+
+  const CARDINAL: Array<[number, number, number]> = [
+    [0, -1, 1.0],
+    [-1, 0, 1.0],
+    [1, 0, 1.0],
+    [0, 1, 1.0],
+  ];
+  const DIAGONAL: Array<[number, number, number]> = [
+    [-1, -1, 0.3],
+    [1, -1, 0.3],
+    [-1, 1, 0.3],
+    [1, 1, 0.3],
+  ];
+  const ALL_NEIGHBORS = [...CARDINAL, ...DIAGONAL];
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const cell = grid[y][x];
+      const isBurning =
+        cell.status === "burning" || cell.status === "residential_burning";
+      if (!isBurning) continue;
+
+      const burnRate = cell.residential ? 0.025 : 0.02;
+      const consume = burnRate + cell.heat * BURNOUT_RATE;
+      next[y][x].fuel = Math.max(0, cell.fuel - consume * 100);
+      next[y][x].heat = Math.max(0, cell.heat - HEAT_DECAY);
+
+      if (next[y][x].fuel <= 0 || next[y][x].heat <= 0) {
+        next[y][x].status = cell.residential
+          ? "residential_destroyed"
+          : "burned";
+        next[y][x].heat = 0;
+      }
+
+      for (const [dx, dy, dirWeight] of ALL_NEIGHBORS) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+
+        const neighbor = grid[ny][nx];
+        // In a controlled burn, fire crews actively protect residential zones
+        if (neighbor.status === "residential") continue;
+        if (neighbor.status !== "unburned" || neighbor.fuel <= 0) continue;
+
+        const windAlignment = dx * params.windDirX + dy * params.windDirY;
+        const windBoost = Math.max(0, windAlignment) * (params.windSpeed / 30);
+
+        let elevBoost = 1.0;
+        if (elevation) {
+          const dElev = (elevation[ny]?.[nx] ?? 0) - (elevation[y]?.[x] ?? 0);
+          elevBoost =
+            dElev > 0 ? 1 + dElev * 5 : Math.max(0.4, 1 + dElev * 1.5);
+        }
+
+        const dryness = 1 - neighbor.moisture * 0.75;
+        const fuelFactor = neighbor.fuel / 100;
+        const baseProb = 0.08 * fuelFactor * tempFactor * humidityFactor;
+        const prob =
+          baseProb *
+          (1 + windBoost * 2.0) *
+          elevBoost *
+          dryness *
+          SPREAD_SUPPRESSION *
+          dirWeight;
+
+        if (Math.random() < prob) {
+          next[ny][nx].status = "burning";
+          next[ny][nx].heat = 0.5 + Math.random() * 0.3;
+        }
+      }
+    }
+  }
+
+  return next;
+}
 
 export interface RiskBreakdown {
   score: number;
@@ -226,81 +299,64 @@ export function calculateRisk(
 export function calculateRiskBreakdown(
   grid: Grid,
   params: SimParams,
-  _elevation?: number[][] | null // no longer used; slope is in cells
+  elevation?: number[][] | null
 ): RiskBreakdown {
   const h = grid.length;
   const w = grid[0]?.length ?? 0;
 
-  let totalFuel = 0;
-  let totalMoisture = 0;
-  let cellCount = 0;
-  let highFuelCells = 0;
-  let totalSlope = 0;
-  let slopeCellCount = 0;
-
+  let totalFuel = 0,
+    cellCount = 0,
+    highFuelCells = 0;
   for (const row of grid) {
     for (const cell of row) {
       if (cell.status === "firebreak") continue;
       totalFuel += cell.fuel;
-      totalMoisture += cell.moisture;
       cellCount++;
-      if (cell.fuel > 60 && cell.status === "unburned") highFuelCells++;
-      if (cell.slope > 0) {
-        totalSlope += cell.slope;
-        slopeCellCount++;
-      }
+      if (
+        cell.fuel > 60 &&
+        (cell.status === "unburned" || cell.status === "residential")
+      )
+        highFuelCells++;
     }
   }
-
   const avgFuel = cellCount > 0 ? totalFuel / cellCount : 0;
-  const avgMoisture = cellCount > 0 ? totalMoisture / cellCount : 0;
 
-  // Fuel load factor: high fuel + low moisture = higher risk.
-  // Previously moisture (NDMI) was ignored here even though it's loaded into cells.
-  const drynessFactor = 1 - avgMoisture * 0.6;
-  const fuelLoad =
-    (avgFuel / 100) *
-    (1 + (highFuelCells / Math.max(cellCount, 1)) * 0.6) *
-    drynessFactor;
-
-  // Weather: temperature / humidity interaction.
   const safeHumidity = Math.max(params.humidity, 1);
   const moistureFactor = params.temperature / safeHumidity;
-
-  // Wind.
   const windFactor = Math.pow(Math.max(params.windSpeed, 1), 1.2);
 
-  // Slope: use per-cell slope degrees from TIFF band.
-  // Average slope in degrees → factor. 30° ≈ +60% risk.
-  const avgSlopeDeg = slopeCellCount > 0 ? totalSlope / slopeCellCount : 0;
-  const slopeFactor = 1 + Math.min(0.6, avgSlopeDeg / 50);
+  let slopeFactor = 1.0;
+  if (elevation && elevation.length === h && elevation[0]?.length === w) {
+    let slopeSum = 0,
+      slopeN = 0;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const dx = elevation[y][x + 1] - elevation[y][x - 1];
+        const dy = elevation[y + 1][x] - elevation[y - 1][x];
+        slopeSum += Math.sqrt(dx * dx + dy * dy);
+        slopeN++;
+      }
+    }
+    const avgSlope = slopeN > 0 ? slopeSum / slopeN : 0;
+    slopeFactor = 1 + Math.min(0.6, avgSlope * 18);
+  }
 
-  // Fuel continuity: fraction of grid covered by largest connected fuel cluster.
   const continuity = largestConnectedFuel(grid);
   const continuityRatio = cellCount > 0 ? continuity / cellCount : 0;
   const continuityFactor = 0.7 + continuityRatio * 0.9;
 
-  // Raw risk score. Instead of a magic-number ceiling, we normalize against a
-  // computed reference scenario (calm, moist, flat) so the scale is self-calibrating.
+  const fuelLoad =
+    (avgFuel / 100) * (1 + (highFuelCells / Math.max(cellCount, 1)) * 0.6);
   const rawRisk =
     fuelLoad * moistureFactor * windFactor * slopeFactor * continuityFactor;
-
-  // Reference: avgFuel=100, highFuelRatio=1, moisture=0 → fuelLoad≈1.6
-  //            temp=110, humidity=5 → moistureFactor=22
-  //            windSpeed=60 → windFactor≈116
-  //            slopeDeg=45 → slopeFactor=1.6
-  //            continuityRatio=1 → continuityFactor=1.6
-  // = 1.6 * 22 * 116 * 1.6 * 1.6 ≈ 10 500
-  const maxExpectedRisk = 10_500;
-  const pct = (rawRisk / maxExpectedRisk) * 100;
-  const score = Math.min(Math.max(Math.round(pct), 0), 100);
+  const score = Math.min(Math.max(Math.round((rawRisk / 6800) * 100), 0), 100);
 
   return {
     score,
     factors: {
       fuelLoad: clamp01(fuelLoad / 1.6),
-      weather: clamp01(moistureFactor / 22),
-      wind: clamp01(windFactor / 116),
+      weather: clamp01(moistureFactor / 8),
+      wind: clamp01(windFactor / 90),
       slope: clamp01((slopeFactor - 1) / 0.6),
       continuity: clamp01(continuityRatio),
     },
@@ -323,7 +379,8 @@ function largestConnectedFuel(grid: Grid): number {
       if (
         cell.fuel < 30 ||
         cell.status === "firebreak" ||
-        cell.status === "burned"
+        cell.status === "burned" ||
+        cell.status === "residential_destroyed"
       ) {
         seen[y * w + x] = 1;
         continue;
@@ -337,7 +394,12 @@ function largestConnectedFuel(grid: Grid): number {
         const cx = idx % w;
         const cy = (idx - cx) / w;
         const c = grid[cy][cx];
-        if (c.fuel < 30 || c.status === "firebreak" || c.status === "burned")
+        if (
+          c.fuel < 30 ||
+          c.status === "firebreak" ||
+          c.status === "burned" ||
+          c.status === "residential_destroyed"
+        )
           continue;
         size++;
         if (cx > 0) stack.push(idx - 1);
@@ -360,234 +422,183 @@ export function riskCategory(score: number): { label: string; color: string } {
   return { label: "VERY HIGH", color: "#f85149" }; // red
 }
 
-// ---------------------------------------------------------------------------
-// Controlled burn optimizer
-// ---------------------------------------------------------------------------
-
 export interface BurnPlan {
   stripCount?: number;
   stripWidth?: number;
   reductionStrength?: number;
 }
 
-/**
- * Optimized controlled burn planner.
- *
- * OLD behavior: burned evenly-spaced horizontal strips, ignoring terrain,
- * wind direction, and fuel distribution entirely.
- *
- * NEW behavior — three-phase strategy:
- *
- * 1. RIDGELINE ANCHORS — place firebreaks on high-slope ridge cells.
- *    Ridgelines are natural spread accelerators; eliminating fuel there
- *    removes the terrain boost that makes uphill runs so dangerous.
- *
- * 2. WIND-PERPENDICULAR BREAKS — place strips perpendicular to the dominant
- *    wind vector, targeting rows/columns with the highest fuel load.
- *    A break parallel to the wind does almost nothing; one perpendicular
- *    to it forces a fire to cross bare ground to continue spreading.
- *
- * 3. HIGH-FUEL CLUSTER THINNING — reduce (but not zero) fuel in the
- *    highest-density cells not already addressed by steps 1–2.
- *    Thinning preserves some ground cover (erosion control) while
- *    lowering crown-fire risk.
- */
 export function runControlledBurn(grid: Grid, plan: BurnPlan = {}): Grid {
   const { stripCount = 4, stripWidth = 2, reductionStrength = 0.85 } = plan;
-
   const next = cloneGrid(grid);
   const h = grid.length;
   const w = grid[0].length;
+  const spacing = Math.floor(h / (stripCount + 1));
 
-  // -------------------------------------------------------------------------
-  // Phase 1 — Ridgeline anchors
-  // Find the top-N slope cells and clear a firebreak through them.
-  // We score each cell by slope; the top 3% are treated as ridgeline anchors.
-  // -------------------------------------------------------------------------
-  const slopeThresholdPct = 0.97;
-  const slopes: number[] = [];
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const c = grid[y][x];
-      if (c.status !== "firebreak") slopes.push(c.slope);
-    }
-  }
-  slopes.sort((a, b) => a - b);
-  const ridgeThreshold =
-    slopes.length > 0
-      ? slopes[Math.floor(slopes.length * slopeThresholdPct)]
-      : Infinity;
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const c = next[y][x];
-      if (c.status === "firebreak") continue;
-      if (c.slope >= ridgeThreshold && ridgeThreshold < Infinity) {
-        c.fuel = 0;
-        c.status = "burned";
-        c.heat = 0;
-      }
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Phase 2 — Wind-perpendicular firebreak strips
-  //
-  // Determine spread axis: the dominant wind direction tells us which grid
-  // axis fire will travel along. We place breaks perpendicular to that axis.
-  //
-  // If |windDirX| >= |windDirY|: wind is primarily east-west → fire spreads
-  //   along columns → breaks should be vertical strips (fixed x).
-  // Otherwise: wind is primarily north-south → fire spreads along rows →
-  //   breaks should be horizontal strips (fixed y).
-  //
-  // Among all candidate strips, we pick the ones with the highest total
-  // burnable fuel (those are the most impactful to remove).
-  // -------------------------------------------------------------------------
-
-  // We need the wind from the grid's params — callers set windDirX/Y on SimParams.
-  // Since BurnPlan doesn't carry params, we infer dominant axis from the grid's
-  // aspect distribution as a fallback proxy for wind when no explicit direction
-  // is passed. But the cleaner fix is to accept params in the plan:
-  const windX = plan.windDirX ?? 0;
-  const windY = plan.windDirY ?? 1; // default: northerly wind (fire spreads south)
-
-  const useVerticalStrips = Math.abs(windX) >= Math.abs(windY);
-
-  if (useVerticalStrips) {
-    // Score each column by total fuel.
-    const colFuel: number[] = new Array(w).fill(0);
-    for (let x = 0; x < w; x++) {
-      for (let y = 0; y < h; y++) {
-        const c = grid[y][x];
-        if (c.status !== "firebreak") colFuel[x] += c.fuel;
-      }
-    }
-    const colOrder = Array.from({ length: w }, (_, i) => i).sort(
-      (a, b) => colFuel[b] - colFuel[a]
-    );
-    const spacing = Math.floor(w / (stripCount + 1));
-    // Pick evenly-distributed columns biased toward high fuel.
-    const chosen = new Set<number>();
-    for (let s = 1; s <= stripCount; s++) {
-      const anchor = s * spacing;
-      // Among candidates ±spacing/2 from anchor, pick highest-fuel column.
-      let best = anchor;
-      let bestFuel = -1;
-      for (let candidate of colOrder) {
-        if (Math.abs(candidate - anchor) <= spacing / 2) {
-          if (colFuel[candidate] > bestFuel) {
-            bestFuel = colFuel[candidate];
-            best = candidate;
-          }
-        }
-      }
-      chosen.add(best);
-    }
-    for (const cx of chosen) {
-      for (let dx = 0; dx < stripWidth; dx++) {
-        const x = cx + dx;
-        if (x < 0 || x >= w) continue;
-        for (let y = 0; y < h; y++) {
-          const c = next[y][x];
-          if (c.status === "firebreak") continue;
-          c.fuel = 0;
-          c.status = "burned";
-          c.heat = 0;
-        }
-      }
-    }
-  } else {
-    // Score each row by total fuel.
-    const rowFuel: number[] = new Array(h).fill(0);
-    for (let y = 0; y < h; y++) {
+  for (let s = 1; s <= stripCount; s++) {
+    const stripY = s * spacing;
+    for (let dy = 0; dy < stripWidth; dy++) {
+      const y = stripY + dy;
+      if (y < 0 || y >= h) continue;
       for (let x = 0; x < w; x++) {
-        const c = grid[y][x];
-        if (c.status !== "firebreak") rowFuel[y] += c.fuel;
+        const cell = next[y][x];
+        // Never clear residential cells in a controlled burn — crews protect structures
+        if (cell.status === "firebreak" || cell.status === "residential")
+          continue;
+        cell.fuel = cell.fuel * (1 - reductionStrength);
+        cell.status = "burned";
+        cell.heat = 0;
       }
-    }
-    const rowOrder = Array.from({ length: h }, (_, i) => i).sort(
-      (a, b) => rowFuel[b] - rowFuel[a]
-    );
-    const spacing = Math.floor(h / (stripCount + 1));
-    const chosen = new Set<number>();
-    for (let s = 1; s <= stripCount; s++) {
-      const anchor = s * spacing;
-      let best = anchor;
-      let bestFuel = -1;
-      for (let candidate of rowOrder) {
-        if (Math.abs(candidate - anchor) <= spacing / 2) {
-          if (rowFuel[candidate] > bestFuel) {
-            bestFuel = rowFuel[candidate];
-            best = candidate;
-          }
-        }
-      }
-      chosen.add(best);
-    }
-    for (const ry of chosen) {
-      for (let dy = 0; dy < stripWidth; dy++) {
-        const y = ry + dy;
-        if (y < 0 || y >= h) continue;
-        for (let x = 0; x < w; x++) {
-          const c = next[y][x];
-          if (c.status === "firebreak") continue;
-          c.fuel = 0;
-          c.status = "burned";
-          c.heat = 0;
-        }
-      }
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Phase 3 — High-fuel cluster thinning
-  // Reduce (not zero) fuel in the top-density cells not already cleared.
-  // This lowers crown-fire risk while preserving ground cover.
-  // Target: top 8% of unburned cells by fuel value, reduce by reductionStrength.
-  // -------------------------------------------------------------------------
-  const fuelValues: number[] = [];
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const c = next[y][x];
-      if (c.status === "unburned" && c.fuel > 0) fuelValues.push(c.fuel);
-    }
-  }
-  fuelValues.sort((a, b) => a - b);
-  const thinThreshold =
-    fuelValues.length > 0
-      ? fuelValues[Math.floor(fuelValues.length * 0.92)]
-      : Infinity;
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const c = next[y][x];
-      if (c.status !== "unburned" || c.fuel < thinThreshold) continue;
-      // Thin rather than zero — partial reduction, not full removal.
-      c.fuel = c.fuel * (1 - reductionStrength * 0.5);
     }
   }
 
   return next;
 }
 
-/**
- * Extended plan type used by the optimizer UI.
- * Adds wind direction so the planner can orient breaks correctly.
- */
-export interface BurnPlan {
-  stripCount?: number;
-  stripWidth?: number;
-  reductionStrength?: number;
-  windDirX?: number;
-  windDirY?: number;
-}
-
 export function isAnyBurning(grid: Grid): boolean {
   for (const row of grid) {
     for (const cell of row) {
-      if (cell.status === "burning") return true;
+      if (cell.status === "burning" || cell.status === "residential_burning")
+        return true;
     }
   }
   return false;
+}
+
+// ── Settlement placement ──────────────────────────────────────────────────────
+
+export interface Settlement {
+  type: "town" | "hamlet" | "rural";
+  cx: number;
+  cy: number;
+  cells: Array<{ x: number; y: number }>;
+}
+
+/**
+ * Stamps residential zones onto an existing grid.
+ * Layouts are deterministic in shape but positioned with slight randomness
+ * so each map feels unique while ensuring settlements are spread across the terrain.
+ */
+export function placeSettlements(
+  grid: Grid,
+  seed = Math.random()
+): { grid: Grid; settlements: Settlement[] } {
+  const next = cloneGrid(grid);
+  const h = next.length;
+  const w = next[0].length;
+  const settlements: Settlement[] = [];
+
+  // Helper: mark a cell as residential if it's in-bounds, not a firebreak, and not water
+  function stamp(x: number, y: number, cells: Array<{ x: number; y: number }>) {
+    if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) return;
+    if (next[y][x].status === "firebreak") return;
+    if (next[y][x].water) return; // never place structures on water
+    next[y][x] = {
+      ...next[y][x],
+      status: "residential",
+      fuel: 90 + Math.random() * 10, // structures have lots of fuel
+      residential: true,
+    };
+    cells.push({ x, y });
+  }
+
+  // ── Town: dense ~20-cell cluster, upper-left quadrant ────────────────────
+  {
+    const cx = Math.round(w * 0.22 + ((seed * 7) % 1) * w * 0.1);
+    const cy = Math.round(h * 0.28 + ((seed * 13) % 1) * h * 0.1);
+    const cells: Array<{ x: number; y: number }> = [];
+
+    // Grid-like town layout: 4×3 block of buildings with gaps (streets)
+    const blocks = [
+      [0, 0],
+      [1, 0],
+      [3, 0],
+      [4, 0],
+      [0, 2],
+      [1, 2],
+      [2, 2],
+      [3, 2],
+      [4, 2],
+      [0, 4],
+      [2, 4],
+      [3, 4],
+      [4, 4],
+      [1, 4],
+      [1, 3],
+    ];
+    for (const [bx, by] of blocks) {
+      stamp(cx + bx, cy + by, cells);
+    }
+    if (cells.length > 0) settlements.push({ type: "town", cx, cy, cells });
+  }
+
+  // ── Hamlet 1: small cluster, right side ──────────────────────────────────
+  {
+    const cx = Math.round(w * 0.72 + ((seed * 3) % 1) * w * 0.08);
+    const cy = Math.round(h * 0.35 + ((seed * 17) % 1) * h * 0.1);
+    const cells: Array<{ x: number; y: number }> = [];
+    const pattern = [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+      [2, 1],
+      [1, 2],
+    ];
+    for (const [bx, by] of pattern) stamp(cx + bx, cy + by, cells);
+    if (cells.length > 0) settlements.push({ type: "hamlet", cx, cy, cells });
+  }
+
+  // ── Hamlet 2: lower-center ────────────────────────────────────────────────
+  {
+    const cx = Math.round(w * 0.45 + ((seed * 11) % 1) * w * 0.1);
+    const cy = Math.round(h * 0.68 + ((seed * 5) % 1) * h * 0.08);
+    const cells: Array<{ x: number; y: number }> = [];
+    const pattern = [
+      [0, 0],
+      [2, 0],
+      [1, 0],
+      [0, 2],
+      [1, 1],
+    ];
+    for (const [bx, by] of pattern) stamp(cx + bx, cy + by, cells);
+    if (cells.length > 0) settlements.push({ type: "hamlet", cx, cy, cells });
+  }
+
+  // ── Rural ribbon: sparse houses along a diagonal "road" ──────────────────
+  {
+    const cells: Array<{ x: number; y: number }> = [];
+    const startX = Math.round(w * 0.3);
+    const startY = Math.round(h * 0.5);
+    const count = 6;
+    for (let i = 0; i < count; i++) {
+      const rx = startX + i * 7 + Math.round((seed * i * 3) % 3);
+      const ry = startY + Math.round(Math.sin(i * 1.2) * 3);
+      stamp(rx, ry, cells);
+      // Occasionally add a second house next to the road
+      if (i % 2 === 0) stamp(rx, ry + 2, cells);
+    }
+    if (cells.length > 0)
+      settlements.push({ type: "rural", cx: startX, cy: startY, cells });
+  }
+
+  return { grid: next, settlements };
+}
+
+/** Count intact and destroyed structures across the grid */
+export function countStructures(grid: Grid): {
+  total: number;
+  destroyed: number;
+  intact: number;
+} {
+  let total = 0,
+    destroyed = 0;
+  for (const row of grid) {
+    for (const cell of row) {
+      if (cell.residential) {
+        total++;
+        if (cell.status === "residential_destroyed") destroyed++;
+      }
+    }
+  }
+  return { total, destroyed, intact: total - destroyed };
 }
