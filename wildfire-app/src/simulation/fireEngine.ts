@@ -62,6 +62,29 @@ export function ignite(grid: Grid, x: number, y: number): Grid {
   return next;
 }
 
+export function igniteCluster(
+  grid: Grid,
+  x: number,
+  y: number,
+  radius = 2
+): Grid {
+  let next = cloneGrid(grid);
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy > radius * radius) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (ny < 0 || ny >= next.length || nx < 0 || nx >= next[0].length)
+        continue;
+      if (next[ny][nx].status === "unburned" && next[ny][nx].fuel > 0) {
+        next[ny][nx].status = "burning";
+        next[ny][nx].heat = 0.7 + Math.random() * 0.3;
+      }
+    }
+  }
+  return next;
+}
+
 const NEIGHBORS: Array<[number, number]> = [
   [-1, -1],
   [0, -1],
@@ -162,7 +185,6 @@ export function step(
 
         // Moisture: wet cells resist ignition (NDMI-driven).
         const dryness = 1 - neighbor.moisture * 0.75;
-
         const fuelFactor = neighbor.fuel / 100;
         const baseProb = 0.08 * fuelFactor * tempFactor * humidityFactor;
         const prob = baseProb * (1 + windBoost * 2.0) * elevBoost * dryness;
@@ -330,10 +352,12 @@ function largestConnectedFuel(grid: Grid): number {
 }
 
 export function riskCategory(score: number): { label: string; color: string } {
-  if (score <= 25) return { label: "LOW", color: "#3fb950" };
-  if (score <= 50) return { label: "MODERATE", color: "#d29922" };
-  if (score <= 75) return { label: "HIGH", color: "#f85149" };
-  return { label: "EXTREME", color: "#a371f7" };
+  // Matches real-world fire danger rating signs:
+  // Low (green) → Moderate (yellow) → High (orange) → Very High (red)
+  if (score <= 25) return { label: "LOW", color: "#3fb950" }; // green
+  if (score <= 50) return { label: "MODERATE", color: "#e3b341" }; // yellow
+  if (score <= 75) return { label: "HIGH", color: "#e8822a" }; // orange
+  return { label: "VERY HIGH", color: "#f85149" }; // red
 }
 
 // ---------------------------------------------------------------------------
