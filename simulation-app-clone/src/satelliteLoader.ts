@@ -175,35 +175,23 @@ export function elevationFromImageData(
   return result;
 }
 
-/**
- * Generates a synthetic elevation grid using simple noise — used for the
- * RANDOM FOREST mode where there's no satellite image to derive heights from.
- */
-export function syntheticElevationMap(gridW: number, gridH: number): number[][] {
-  const result: number[][] = [];
-  for (let y = 0; y < gridH; y++) {
-    const row: number[] = [];
-    for (let x = 0; x < gridW; x++) {
-      const a = Math.sin(x * 0.06) * Math.cos(y * 0.05);
-      const b = Math.sin(x * 0.13 + y * 0.09) * 0.5;
-      const c = Math.cos(x * 0.025 - y * 0.03) * 0.7;
-      const v = (a + b + c + 2.2) / 4.4;
-      row.push(Math.max(0, Math.min(1, v)));
-    }
-    result.push(row);
-  }
-  return result;
-}
-
 function isWater(r: number, g: number, b: number): boolean {
   return b > r + 25 && b > g + 25 && b > 80;
 }
 
 /**
+<<<<<<< HEAD
  * Maps an NDVI palette color to a fuel value 0-100. The satellite-realistic
  * palette (see NDVI_RAMP in tiffLoader.ts) goes brown → yellow-green → green
  * as NDVI rises, so projecting onto the green-red axis recovers fuel:
  * green dominance → forest / high fuel, red/brown dominance → bare / low fuel.
+=======
+ * Maps an NDVI palette color to a fuel value 0-100. The fire-risk palette
+ * (see NDVI_RAMP in scripts/tiff_to_png.py) goes
+ * green → yellow → orange → red as NDVI rises, so projecting the color onto
+ * the red-green axis recovers the underlying fuel: red dominance → forest /
+ * high fuel, green dominance → bare / low fuel.
+>>>>>>> ed36e01633963b7c59b5de87aa4604b761d237ad
  */
 function colorToFuel(r: number, g: number, b: number): number {
   if (r > 235 && g > 235 && b > 235) return 8;
@@ -212,4 +200,83 @@ function colorToFuel(r: number, g: number, b: number): number {
   const denom = Math.max(r + g, 1);
   const axis = (g - r) / denom; // ~ -1 (pure red/brown) … +1 (pure green)
   return Math.max(5, Math.min(100, 50 + axis * 80));
+}
+
+// Natural satellite color ramp indexed by green-red axis (-1 = bare, +1 = dense forest)
+const NATURAL_RAMP: Array<[number, number, number, number]> = [
+  [-1.0, 110,  88,  72],  // barren / rocky
+  [-0.5, 190, 158, 100],  // dry bare soil
+  [ 0.0, 178, 172, 100],  // very sparse vegetation / sandy
+  [ 0.25, 138, 162,  80], // grassland
+  [ 0.5,  85, 142,  60],  // shrubs
+  [ 0.75, 52, 118,  44],  // light forest
+  [ 1.0,  28,  80,  24],  // dense forest
+];
+
+function naturalRampInterp(axis: number): [number, number, number] {
+  const v = Math.max(-1, Math.min(1, axis));
+  for (let i = 1; i < NATURAL_RAMP.length; i++) {
+    if (v <= NATURAL_RAMP[i][0]) {
+      const [t0, r0, g0, b0] = NATURAL_RAMP[i - 1];
+      const [t1, r1, g1, b1] = NATURAL_RAMP[i];
+      const f = (v - t0) / (t1 - t0);
+      return [
+        Math.round(r0 + (r1 - r0) * f),
+        Math.round(g0 + (g1 - g0) * f),
+        Math.round(b0 + (b1 - b0) * f),
+      ];
+    }
+  }
+  const last = NATURAL_RAMP[NATURAL_RAMP.length - 1];
+  return [last[1], last[2], last[3]];
+}
+
+function recolorPixel(r: number, g: number, b: number, a: number): [number, number, number, number] {
+  if (a < 32) return [0, 0, 0, 0];
+  if (isWater(r, g, b)) return [32, 72, 125, 255];
+  const denom = Math.max(r + g, 1);
+  const axis = (g - r) / denom;
+  const [nr, ng, nb] = naturalRampInterp(axis);
+  return [nr, ng, nb, 255];
+}
+
+async function recolorToNatural(imgData: ImageData): Promise<string> {
+  const { data, width, height } = imgData;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get 2D canvas context');
+  const out = ctx.createImageData(width, height);
+  for (let i = 0; i < width * height; i++) {
+    const [nr, ng, nb, na] = recolorPixel(
+      data[i * 4], data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3]
+    );
+    out.data[i * 4] = nr;
+    out.data[i * 4 + 1] = ng;
+    out.data[i * 4 + 2] = nb;
+    out.data[i * 4 + 3] = na;
+  }
+  ctx.putImageData(out, 0, 0);
+  return new Promise<string>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) reject(new Error('Failed to encode recolored texture'));
+      else resolve(URL.createObjectURL(blob));
+    }, 'image/png');
+  });
+}
+
+/**
+ * Loads an NDVI false-color PNG, converts it to a fire grid, AND produces a
+ * natural-color satellite texture blob URL suitable for the 3D terrain.
+ */
+export async function loadFuelAndTextureFromImage(
+  url: string,
+  gridW: number,
+  gridH: number
+): Promise<{ grid: Grid; naturalTextureUrl: string }> {
+  const imgData = await loadImageData(url);
+  const grid = gridFromImageData(imgData, gridW, gridH);
+  const naturalTextureUrl = await recolorToNatural(imgData);
+  return { grid, naturalTextureUrl };
 }
