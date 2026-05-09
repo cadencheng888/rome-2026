@@ -49,11 +49,11 @@ export const FIRE_LOCATIONS = [
     tiffPath: "/tiffs/fort-mcmurray.tif",
   },
   {
-    id: "valparaiso",
-    name: "Valparaiso, Chile",
-    lat: -33.0472,
-    lng: -71.6127,
-    tiffPath: "/tiffs/valparaiso.tif",
+    id: "knysna",
+    name: "Knysna, South Africa",
+    lat: -34.0356,
+    lng: 23.0465,
+    tiffPath: "/tiffs/knysna.tif",
   },
   {
     id: "mati",
@@ -77,11 +77,11 @@ export const FIRE_LOCATIONS = [
     tiffPath: "/tiffs/amazon.tif",
   },
   {
-    id: "krasnoyarsk",
-    name: "Krasnoyarsk, Russia",
-    lat: 60.0,
-    lng: 97.0,
-    tiffPath: "/tiffs/krasnoyarsk.tif",
+    id: "sumatra",
+    name: "Sumatra, Indonesia",
+    lat: -0.5897,
+    lng: 101.3431,
+    tiffPath: "/tiffs/sumatra.tif",
   },
 ];
 
@@ -279,7 +279,9 @@ export default function Globe() {
       <div className="globe-mount" ref={mountRef} />
       <div className="globe-overlay-top">
         <div className="globe-title">SELECT A LOCATION</div>
-        <div className="globe-subtitle">Click a pin to launch a fire simulation on that landscape.</div>
+        <div className="globe-subtitle">
+          Click a pin to launch a fire simulation on that landscape.
+        </div>
       </div>
       <div className="globe-hints">
         <span>Click pin · simulate</span>
