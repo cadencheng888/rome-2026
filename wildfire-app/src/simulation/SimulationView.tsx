@@ -57,8 +57,6 @@ export interface SimSummary {
   riskBefore: number;
   riskAfter: number;
   elapsedSeconds: number;
-  structuresDestroyed: number;
-  structuresTotal: number;
 }
 
 export interface LiveStats {
@@ -66,9 +64,6 @@ export interface LiveStats {
   cellsBurned: number;
   totalCells: number;
   elapsedSeconds: number;
-  structuresBurning: number;
-  structuresDestroyed: number;
-  structuresTotal: number;
 }
 
 interface Props {
@@ -135,32 +130,88 @@ function controlledParams(): SimParams {
 function gridStats(grid: Grid) {
   let burning = 0,
     burned = 0,
-    total = 0,
-    structuresBurning = 0,
-    structuresDestroyed = 0,
-    structuresTotal = 0;
+    total = 0;
   for (const row of grid) {
     for (const cell of row) {
       if (cell.status === "firebreak") continue;
-      if (cell.residential) {
-        structuresTotal++;
-        if (cell.status === "residential_burning") structuresBurning++;
-        if (cell.status === "residential_destroyed") structuresDestroyed++;
-        continue; // don't double-count in vegetation totals
-      }
       total++;
       if (cell.status === "burning") burning++;
       if (cell.status === "burned") burned++;
     }
   }
-  return {
-    burning,
-    burned,
-    total,
-    structuresBurning,
-    structuresDestroyed,
-    structuresTotal,
-  };
+  return { burning, burned, total };
+}
+
+// ── Water detection ───────────────────────────────────────────────────────────
+// Samples the NDVI texture (already rendered by parseTiff) to detect water
+// cells without touching satelliteLoader. Each grid cell's block of pixels is
+// averaged; if blue dominates it's flagged water: true. This matches the same
+// blue palette the NDVI ramp assigns to NDVI < -0.1.
+
+async function flagWaterCells(
+  grid: Grid,
+  ndviUrl: string,
+  gridW: number,
+  gridH: number
+): Promise<Grid> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(grid);
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const {
+        data,
+        width: iw,
+        height: ih,
+      } = ctx.getImageData(0, 0, img.width, img.height);
+
+      const blockW = iw / gridW;
+      const blockH = ih / gridH;
+
+      const next = grid.map((row, gy) =>
+        row.map((cell, gx) => {
+          const x0 = Math.floor(gx * blockW);
+          const y0 = Math.floor(gy * blockH);
+          const x1 = Math.min(iw, Math.floor((gx + 1) * blockW));
+          const y1 = Math.min(ih, Math.floor((gy + 1) * blockH));
+
+          let rSum = 0,
+            gSum = 0,
+            bSum = 0,
+            n = 0;
+          for (let py = y0; py < y1; py++) {
+            for (let px = x0; px < x1; px++) {
+              const i = (py * iw + px) * 4;
+              if (data[i + 3] < 32) continue; // skip transparent
+              rSum += data[i];
+              gSum += data[i + 1];
+              bSum += data[i + 2];
+              n++;
+            }
+          }
+          if (n === 0) return cell;
+
+          const r = rSum / n,
+            g = gSum / n,
+            b = bSum / n;
+          // Matches the NDVI ramp: water is deep blue (#0f3782) through
+          // grey-blue (#505a64) for NDVI values below ~-0.05.
+          const isWater = b > r + 20 && b > g + 15 && b > 70;
+          return isWater ? { ...cell, water: true } : cell;
+        })
+      );
+      resolve(next);
+    };
+    img.onerror = () => resolve(grid); // silently skip on error
+    img.src = ndviUrl;
+  });
 }
 
 // ── component ────────────────────────────────────────────────────────────────
@@ -271,8 +322,14 @@ export default function SimulationView({
           URL.revokeObjectURL(tile.ndviUrl);
           return;
         }
+        const waterFlagged = await flagWaterCells(
+          tile.grid,
+          tile.ndviUrl,
+          GRID_W,
+          GRID_H
+        );
         const { grid: gridWithSettlements, settlements: placed } =
-          placeSettlements(tile.grid);
+          placeSettlements(waterFlagged);
         setActiveTiffUrl(tile.ndviUrl);
         setGrid(gridWithSettlements);
         setSettlements(placed);
@@ -334,9 +391,6 @@ export default function SimulationView({
           cellsBurned: s.burned,
           totalCells: s.total,
           elapsedSeconds: Math.round(elapsedRef.current),
-          structuresBurning: s.structuresBurning,
-          structuresDestroyed: s.structuresDestroyed,
-          structuresTotal: s.structuresTotal,
         });
         return next;
       });
@@ -361,8 +415,6 @@ export default function SimulationView({
           riskBefore: startRiskRef.current,
           riskAfter: riskScore,
           elapsedSeconds: Math.round(elapsedRef.current),
-          structuresDestroyed: s.structuresDestroyed,
-          structuresTotal: s.structuresTotal,
         });
         setLiveStats(null);
         return g;
@@ -406,8 +458,14 @@ export default function SimulationView({
           tiffPath.split("/").pop() ?? "region.tiff"
         );
         const tile = await parseTiff(file, GRID_W, GRID_H);
+        const waterFlagged = await flagWaterCells(
+          tile.grid,
+          tile.ndviUrl,
+          GRID_W,
+          GRID_H
+        );
         const { grid: gridWithSettlements, settlements: placed } =
-          placeSettlements(tile.grid);
+          placeSettlements(waterFlagged);
         setGrid(gridWithSettlements);
         setSettlements(placed);
         setActiveTiffUrl((prev) => {
@@ -489,8 +547,6 @@ export default function SimulationView({
           riskBefore: preRisk,
           riskAfter: afterRisk,
           elapsedSeconds: Math.round(elapsedRef.current),
-          structuresDestroyed: s.structuresDestroyed,
-          structuresTotal: s.structuresTotal,
         });
         setLiveStats(null);
         return snuffed;
@@ -702,18 +758,6 @@ function LiveStatsHUD({ stats, mode }: { stats: LiveStats; mode: FireMode }) {
   const accent = mode === "wildfire" ? "#f85149" : "#1f6feb";
   const label = mode === "wildfire" ? "WILDFIRE" : "CONTROLLED BURN";
 
-  const structureColor =
-    stats.structuresDestroyed > 0
-      ? "#f85149"
-      : stats.structuresBurning > 0
-      ? "#d29922"
-      : "#3fb950";
-
-  const structureValue =
-    stats.structuresTotal > 0
-      ? `${stats.structuresDestroyed}/${stats.structuresTotal}`
-      : "—";
-
   return (
     <div
       style={{
@@ -753,11 +797,6 @@ function LiveStatsHUD({ stats, mode }: { stats: LiveStats; mode: FireMode }) {
         label="CONSUMED"
         value={`${pct}%`}
         color={pct > 30 ? "#f85149" : pct > 10 ? "#d29922" : "#3fb950"}
-      />
-      <StatPill
-        label="STRUCTURES LOST"
-        value={structureValue}
-        color={structureColor}
       />
       <StatPill
         label="ELAPSED"

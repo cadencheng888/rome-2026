@@ -16,7 +16,6 @@ export async function loadFuelFromImage(
 /**
  * Reduces an NDVI-colorized ImageData buffer to a fire-engine Grid.
  * Slope and aspect default to 0 (unavailable from image path).
- * Water cells are detected by blue-dominant color and marked with water: true.
  */
 export function gridFromImageData(
   imgData: ImageData,
@@ -50,7 +49,7 @@ export function gridFromImageData(
           const a = data[idx + 3];
           totalPixels++;
           if (a < 32) continue;
-          if (isWaterColor(r, g, b)) {
+          if (isWater(r, g, b)) {
             waterPixels++;
             validPixels++;
             continue;
@@ -63,7 +62,6 @@ export function gridFromImageData(
       const validRatio = totalPixels > 0 ? validPixels / totalPixels : 0;
       const waterRatio = validPixels > 0 ? waterPixels / validPixels : 0;
       const burnablePixels = validPixels - waterPixels;
-      const isWaterCell = waterRatio > 0.5;
 
       let fuel: number;
       let status: Cell["status"];
@@ -71,7 +69,7 @@ export function gridFromImageData(
       if (validRatio < 0.25) {
         fuel = 0;
         status = "firebreak";
-      } else if (isWaterCell) {
+      } else if (waterRatio > 0.5) {
         fuel = 0;
         status = "firebreak";
       } else {
@@ -79,15 +77,7 @@ export function gridFromImageData(
         status = fuel < 5 ? "firebreak" : "unburned";
       }
 
-      row.push({
-        fuel,
-        moisture: 0,
-        slope: 0,
-        aspect: 0,
-        status,
-        heat: 0,
-        water: isWaterCell,
-      });
+      row.push({ fuel, moisture: 0, slope: 0, aspect: 0, status, heat: 0 });
     }
     grid.push(row);
   }
@@ -118,6 +108,12 @@ async function loadImageData(url: string): Promise<ImageData> {
 /**
  * Builds a normalized (0–1) elevation grid directly from a Float32 band array,
  * avoiding the lossy elevation → 8-bit grayscale → float round-trip.
+ *
+ * Previously, parseTiff painted elevation to an 8-bit grayscale ImageData and
+ * then read it back here via elevationFromImageData. That quantizes potentially
+ * thousands of meters of elevation range into 256 levels (~4m resolution for
+ * a 1000m span), discarding sub-step variation and introducing banding
+ * artifacts in the displacement map.
  */
 export function elevationFromFloat32(
   elevBand: ArrayLike<number>,
@@ -160,6 +156,8 @@ export function elevationFromFloat32(
 
 /**
  * Legacy path: derive elevation from an 8-bit grayscale ImageData.
+ * Kept for backwards compatibility with callers that don't have the float band.
+ * Prefer elevationFromFloat32 whenever the raw TIFF band is available.
  */
 export function elevationFromImageData(
   imgData: ImageData,
@@ -196,6 +194,7 @@ export function elevationFromImageData(
 
 /**
  * Generates a synthetic elevation grid using simple noise.
+ * Used for RANDOM FOREST mode where there's no satellite image.
  */
 export function syntheticElevationMap(
   gridW: number,
@@ -217,16 +216,20 @@ export function syntheticElevationMap(
 }
 
 /**
- * Builds a fire-engine Grid from raw 7-band GeoTIFF arrays.
- * Water cells (NLCD class 11 or waterRatio > 0.5) are marked with water: true
- * in addition to having fuel: 0 and status: "firebreak".
+ * Builds a fire-engine Grid from raw 7-band GeoTIFF arrays, including
+ * the slope and aspect bands that were previously discarded.
+ *
+ * - Fuel: NLCD land-cover scaled by NDVI vegetation density
+ * - Moisture: NDMI → 0 (dry) to 1 (wet)
+ * - Slope: degrees from TIFF Band 2 (was ignored before)
+ * - Aspect: degrees 0–360 from TIFF Band 3 (was ignored before)
  */
 export function gridFromBands(
   ndvi: ArrayLike<number>,
   ndmi: ArrayLike<number>,
   landCover: ArrayLike<number>,
-  slope: ArrayLike<number>,
-  aspect: ArrayLike<number>,
+  slope: ArrayLike<number>, // NEW: Band 2, degrees
+  aspect: ArrayLike<number>, // NEW: Band 3, degrees 0-360
   pixelW: number,
   pixelH: number,
   gridW: number,
@@ -245,16 +248,13 @@ export function gridFromBands(
       const y1 = Math.min(pixelH, Math.floor((gy + 1) * blockH));
 
       let ndviSum = 0,
-        ndmiSum = 0;
+        ndmiSum = 0,
+        lcSum = 0;
       let slopeSum = 0,
         aspectSinSum = 0,
         aspectCosSum = 0;
       let count = 0,
         waterCount = 0;
-      // Track landcover by mode (most-common class), not arithmetic mean.
-      // Averaging class IDs is meaningless — class 11 (water) averaged with
-      // class 41 (forest) gives 26, which is neither.
-      const lcCounts: Record<number, number> = {};
 
       for (let py = y0; py < y1; py++) {
         for (let px = x0; px < x1; px++) {
@@ -267,17 +267,13 @@ export function gridFromBands(
           ndmiSum += Number.isFinite(m) ? m : 0;
 
           const lc = landCover[idx];
-          if (Number.isFinite(lc)) {
-            const lcInt = Math.round(lc);
-            lcCounts[lcInt] = (lcCounts[lcInt] ?? 0) + 1;
-            // NLCD class 11 = Open Water; lc === 0 catches no-data ocean fill
-            // that some providers use outside the land boundary.
-            if (lcInt === 11 || lcInt === 0) waterCount++;
-          }
+          lcSum += lc;
+          if (lc === 11) waterCount++;
 
           const sl = slope[idx];
           if (Number.isFinite(sl)) slopeSum += sl;
 
+          // Aspect: circular mean to handle 0/360 wraparound correctly.
           const asp = aspect[idx];
           if (Number.isFinite(asp)) {
             const rad = (asp * Math.PI) / 180;
@@ -297,62 +293,39 @@ export function gridFromBands(
           aspect: 0,
           status: "firebreak",
           heat: 0,
-          water: false,
         });
         continue;
       }
 
       const avgNdvi = ndviSum / count;
       const avgNdmi = ndmiSum / count;
-
-      // Mode landcover: most common pixel class in this grid cell.
-      // Arithmetic mean of class IDs is meaningless for a categorical variable
-      // (class 11 + class 41 / 2 = 26, which is neither water nor forest).
-      let modeLc = 0;
-      let modeCount = 0;
-      for (const [lc, cnt] of Object.entries(lcCounts)) {
-        if (cnt > modeCount) {
-          modeCount = cnt;
-          modeLc = Number(lc);
-        }
-      }
-
-      // Water detection — three independent signals, any one is sufficient:
-      // 1. >30% of pixels are NLCD class 11 or no-data (lower than 50% to
-      //    catch coastline and river cells that straddle land/water boundaries)
-      // 2. The dominant landcover class is water (11) or no-data fill (0)
-      // 3. NDVI strongly negative + NDMI high (open water spectral signature)
+      const avgLc = Math.round(lcSum / count);
       const waterRatio = waterCount / count;
-      const isWaterCell =
-        waterRatio > 0.3 ||
-        modeLc === 11 ||
-        modeLc === 0 ||
-        (avgNdvi < -0.15 && avgNdmi > 0.15);
 
       const avgSlope = slopeSum / count;
+      // Recover circular mean of aspect.
       const avgAspect =
         (Math.atan2(aspectSinSum / count, aspectCosSum / count) * 180) /
         Math.PI;
       const normalizedAspect = (avgAspect + 360) % 360;
 
-      const baseFuel = landCoverToFuel(modeLc);
+      const baseFuel = landCoverToFuel(avgLc);
       const ndviScale = Math.max(0.2, Math.min(1.5, 0.5 + avgNdvi));
-      const fuel = isWaterCell
-        ? 0
-        : Math.max(0, Math.min(100, baseFuel * ndviScale));
+      const fuel = Math.max(0, Math.min(100, baseFuel * ndviScale));
 
       const moisture = Math.max(0, Math.min(1, (avgNdmi + 1) / 2));
+
+      const isWaterCell = waterRatio > 0.5 || avgLc === 11;
       const status: Cell["status"] =
         isWaterCell || fuel < 5 ? "firebreak" : "unburned";
 
       row.push({
-        fuel,
+        fuel: isWaterCell ? 0 : fuel,
         moisture,
         slope: avgSlope,
         aspect: normalizedAspect,
         status,
         heat: 0,
-        water: isWaterCell,
       });
     }
     grid.push(row);
@@ -398,9 +371,7 @@ function landCoverToFuel(nlcdClass: number): number {
   }
 }
 
-// Detects water by blue-dominant color matching the NDVI ramp entries
-// for NDVI < -0.1 (deep blue #0f3782 through grey-blue #505a64).
-function isWaterColor(r: number, g: number, b: number): boolean {
+function isWater(r: number, g: number, b: number): boolean {
   return b > r + 25 && b > g + 25 && b > 80;
 }
 
