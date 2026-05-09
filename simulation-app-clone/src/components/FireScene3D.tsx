@@ -65,7 +65,7 @@ export function FireScene3D({
         />
         <Fire grid={grid} elevation={smoothed} />
         <Smoke grid={grid} elevation={smoothed} windDirX={windDirX} windDirY={windDirY} windSpeed={windSpeed} />
-        <Trees grid={grid} elevation={smoothed} sceneKey={sceneKey} />
+        <Trees grid={grid} elevation={smoothed} sceneKey={sceneKey} useDisplacement={useDisplacement} />
 
         <OrbitControls
           minDistance={40}
@@ -116,6 +116,36 @@ function elevationAt(elevation: number[][], gx: number, gy: number): number {
   const x = Math.max(0, Math.min(w - 1, gx));
   const y = Math.max(0, Math.min(h - 1, gy));
   return elevation[y][x] * ELEVATION_SCALE;
+}
+
+// Bilinearly interpolate elevation at a world-space XZ position so tree feet
+// match the terrain surface even when the trunk has a random cell offset.
+function elevationAtWorld(
+  elevation: number[][],
+  wx: number,
+  wz: number,
+  gridW: number,
+  gridH: number,
+): number {
+  if (!elevation.length) return 0;
+  const h = elevation.length;
+  const w = elevation[0].length;
+  const planeH = (PLANE_SIZE * gridH) / gridW;
+  // Fractional cell coordinate (cell centers are at 0, 1, 2, …)
+  const fx = (wx / PLANE_SIZE + 0.5) * w - 0.5;
+  const fz = (wz / planeH + 0.5) * h - 0.5;
+  const x0 = Math.floor(fx);
+  const z0 = Math.floor(fz);
+  const tx = fx - x0;
+  const tz = fz - z0;
+  const sample = (xi: number, zi: number) =>
+    elevation[Math.max(0, Math.min(h - 1, zi))]?.[Math.max(0, Math.min(w - 1, xi))] ?? 0;
+  return (
+    sample(x0, z0) * (1 - tx) * (1 - tz) +
+    sample(x0 + 1, z0) * tx * (1 - tz) +
+    sample(x0, z0 + 1) * (1 - tx) * tz +
+    sample(x0 + 1, z0 + 1) * tx * tz
+  ) * ELEVATION_SCALE;
 }
 
 function buildElevationTexture(elevation: number[][]): THREE.CanvasTexture | null {
@@ -538,10 +568,12 @@ function Trees({
   grid,
   elevation,
   sceneKey,
+  useDisplacement,
 }: {
   grid: Grid;
   elevation: number[][];
   sceneKey: string;
+  useDisplacement: boolean;
 }) {
   const trunkRef = useRef<THREE.InstancedMesh>(null!);
   const coneLeavesRef = useRef<THREE.InstancedMesh>(null!);
@@ -615,9 +647,9 @@ function Trees({
       if (trunkIdx >= trunkMax) break;
 
       const [wx, wz] = gridToWorld(t.x, t.y, w, h);
-      const groundY = elevationAt(elevation, t.x, t.y);
       const x = wx + t.offsetX;
       const z = wz + t.offsetZ;
+      const groundY = useDisplacement ? elevationAtWorld(elevation, x, z, w, h) : 0;
       const trunkH = (t.kind === 'conifer' ? 1.6 : 1.3) * t.scale;
       const leanX = Math.sin(x * 1.7 + z * 0.9) * 0.04;
       const leanZ = Math.cos(x * 1.1 - z * 1.4) * 0.04;

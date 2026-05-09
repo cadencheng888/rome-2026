@@ -16,22 +16,21 @@ export interface TiffTile {
 }
 
 /**
- * Fire-risk NDVI palette. Mirrors scripts/tiff_to_png.py. Red maps to
- * high NDVI (dense canopy = lots of fuel = high fire susceptibility);
- * green maps to low NDVI (bare / sparse = low fuel); blue stays water.
- * satelliteLoader.colorToFuel inverts the red-green axis to recover fuel.
+ * Satellite-realistic NDVI palette. Green maps to high NDVI (dense vegetation),
+ * brown/tan maps to bare soil, blue stays water — matching real satellite imagery.
+ * satelliteLoader.colorToFuel uses the green-red axis to recover fuel.
  */
 const NDVI_RAMP: Array<[number, number, number, number]> = [
   [-1.0,  20,  40,  90],
   [-0.2,  60, 100, 160],
-  [ 0.0,  90, 200,  90],
-  [ 0.15, 150, 220,  85],
-  [ 0.3, 220, 220,  80],
-  [ 0.45, 245, 180,  70],
-  [ 0.6, 245, 130,  60],
-  [ 0.75, 230,  80,  50],
-  [ 0.9, 200,  40,  40],
-  [ 1.0, 130,  20,  20],
+  [ 0.0, 110,  85,  60],
+  [ 0.15, 145, 130,  75],
+  [ 0.3, 155, 175,  75],
+  [ 0.45,  95, 165,  70],
+  [ 0.6,  65, 145,  55],
+  [ 0.75,  45, 120,  40],
+  [ 0.9,  28,  90,  28],
+  [ 1.0,  15,  60,  15],
 ];
 
 function rampInterp(value: number): [number, number, number] {

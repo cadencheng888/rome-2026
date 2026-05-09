@@ -200,17 +200,16 @@ function isWater(r: number, g: number, b: number): boolean {
 }
 
 /**
- * Maps an NDVI palette color to a fuel value 0-100. The fire-risk palette
- * (see NDVI_RAMP in tiffLoader.ts / scripts/tiff_to_png.py) goes
- * green → yellow → orange → red as NDVI rises, so projecting the color onto
- * the red-green axis recovers the underlying fuel: red dominance → forest /
- * high fuel, green dominance → bare / low fuel.
+ * Maps an NDVI palette color to a fuel value 0-100. The satellite-realistic
+ * palette (see NDVI_RAMP in tiffLoader.ts) goes brown → yellow-green → green
+ * as NDVI rises, so projecting onto the green-red axis recovers fuel:
+ * green dominance → forest / high fuel, red/brown dominance → bare / low fuel.
  */
 function colorToFuel(r: number, g: number, b: number): number {
   if (r > 235 && g > 235 && b > 235) return 8;
   if (r < 8 && g < 8 && b < 8) return 5;
 
   const denom = Math.max(r + g, 1);
-  const axis = (r - g) / denom; // ~ -1 (pure green) … +1 (pure red)
+  const axis = (g - r) / denom; // ~ -1 (pure red/brown) … +1 (pure green)
   return Math.max(5, Math.min(100, 50 + axis * 80));
 }
