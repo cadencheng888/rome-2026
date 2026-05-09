@@ -175,33 +175,13 @@ export function elevationFromImageData(
   return result;
 }
 
-/**
- * Generates a synthetic elevation grid using simple noise — used for the
- * RANDOM FOREST mode where there's no satellite image to derive heights from.
- */
-export function syntheticElevationMap(gridW: number, gridH: number): number[][] {
-  const result: number[][] = [];
-  for (let y = 0; y < gridH; y++) {
-    const row: number[] = [];
-    for (let x = 0; x < gridW; x++) {
-      const a = Math.sin(x * 0.06) * Math.cos(y * 0.05);
-      const b = Math.sin(x * 0.13 + y * 0.09) * 0.5;
-      const c = Math.cos(x * 0.025 - y * 0.03) * 0.7;
-      const v = (a + b + c + 2.2) / 4.4;
-      row.push(Math.max(0, Math.min(1, v)));
-    }
-    result.push(row);
-  }
-  return result;
-}
-
 function isWater(r: number, g: number, b: number): boolean {
   return b > r + 25 && b > g + 25 && b > 80;
 }
 
 /**
  * Maps an NDVI palette color to a fuel value 0-100. The fire-risk palette
- * (see NDVI_RAMP in tiffLoader.ts / scripts/tiff_to_png.py) goes
+ * (see NDVI_RAMP in scripts/tiff_to_png.py) goes
  * green → yellow → orange → red as NDVI rises, so projecting the color onto
  * the red-green axis recovers the underlying fuel: red dominance → forest /
  * high fuel, green dominance → bare / low fuel.
