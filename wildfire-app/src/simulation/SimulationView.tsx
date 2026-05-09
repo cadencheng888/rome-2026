@@ -62,7 +62,6 @@ export default function SimulationView({
     elevationRef.current = elevation;
   }, [elevation]);
 
-  // Load the bundled TIFF for this location.
   useEffect(() => {
     if (!tiffPath) {
       setLoadError("No terrain data is available for this location.");
@@ -112,7 +111,6 @@ export default function SimulationView({
     };
   }, [tiffPath]);
 
-  // Free the previous tile's blob URL on unmount.
   useEffect(() => {
     return () => {
       setActiveTiffUrl((prev) => {
@@ -140,6 +138,7 @@ export default function SimulationView({
       return;
     }
     tickRef.current = window.setInterval(() => {
+      // elevation ref still passed for API compat; step() now prefers cell.slope/aspect
       setGrid((g) => (g ? step(g, params, elevationRef.current) : g));
     }, TICK_MS);
     return () => {
@@ -209,11 +208,17 @@ export default function SimulationView({
     if (!grid) return;
     setPreviousRisk(riskScore);
     setIsRunning(false);
-    setGrid((g) => (g ? runControlledBurn(g) : g));
+    // Pass current wind direction so the optimizer can orient breaks correctly.
+    setGrid((g) =>
+      g
+        ? runControlledBurn(g, {
+            windDirX: params.windDirX,
+            windDirY: params.windDirY,
+          })
+        : g
+    );
   };
 
-  // Fallback to a 1px transparent PNG until the TIFF finishes parsing — keeps
-  // the texture-loading prop strictly a string for FireScene3D / FireCanvas.
   const ndviTextureUrl =
     activeTiffUrl ??
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
@@ -467,7 +472,7 @@ function LocationDropdown({
         cursor: "pointer",
         appearance: "none",
         backgroundImage:
-          'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'6\' viewBox=\'0 0 10 6\'><path fill=\'%238b949e\' d=\'M0 0l5 6 5-6z\'/></svg>")',
+          "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='%238b949e' d='M0 0l5 6 5-6z'/></svg>\")",
         backgroundRepeat: "no-repeat",
         backgroundPosition: "right 10px center",
       }}

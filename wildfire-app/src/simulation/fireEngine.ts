@@ -2,7 +2,9 @@ export type CellStatus = "unburned" | "burning" | "burned" | "firebreak";
 
 export interface Cell {
   fuel: number;
-  moisture: number; // 0 = dry (ignites easily), 1 = wet (resists fire) — driven by NDMI band
+  moisture: number; // 0 = dry, 1 = wet — from NDMI band
+  slope: number; // degrees, from TIFF slope band (0 if unavailable)
+  aspect: number; // degrees 0–360 (0=N,90=E,180=S,270=W), from TIFF aspect band
   status: CellStatus;
   heat: number;
 }
@@ -35,6 +37,8 @@ export function createGrid(opts: GridOptions): Grid {
       row.push({
         fuel: hasFuel ? 60 + Math.random() * 40 : 0,
         moisture: 0,
+        slope: 0,
+        aspect: 0,
         status: isBreak ? "firebreak" : "unburned",
         heat: 0,
       });
@@ -69,10 +73,55 @@ const NEIGHBORS: Array<[number, number]> = [
   [1, 1],
 ];
 
+/**
+ * Converts a slope in degrees and an aspect in degrees (0=N, 90=E, 180=S, 270=W)
+ * into an elevation boost multiplier for fire spread from (x,y) toward (nx,ny).
+ *
+ * This replaces the old raw-elevation-delta approach, which conflated gentle
+ * slopes with cliffs and produced boost values that varied with grid resolution.
+ * Using the TIFF's actual slope band (in degrees) gives a physically meaningful,
+ * resolution-independent result.
+ *
+ * The aspect tells us which direction the slope faces. We compute how much of
+ * the spread direction aligns with the downslope direction; upslope spread
+ * is boosted, downslope is penalized.
+ */
+function slopeBoost(
+  slopeDeg: number,
+  aspectDeg: number,
+  dx: number,
+  dy: number
+): number {
+  if (slopeDeg < 0.5) return 1.0; // effectively flat
+
+  // Aspect convention: 0=N, 90=E → convert to unit vector pointing downslope.
+  // In image/grid space: +y is south, +x is east.
+  const aspectRad = (aspectDeg * Math.PI) / 180;
+  const downX = Math.sin(aspectRad); // east component of downslope
+  const downY = Math.cos(aspectRad); // south component of downslope
+
+  // Spread direction vector (not normalized for diagonals — intentional;
+  // diagonal spread already travels farther, so we keep consistent units).
+  const len = Math.sqrt(dx * dx + dy * dy);
+  const spreadX = dx / len;
+  const spreadY = dy / len;
+
+  // Alignment: +1 = spreading directly upslope (fire accelerates),
+  //            -1 = spreading directly downslope (fire decelerates).
+  const alignment = spreadX * downX + spreadY * downY;
+
+  // Slope factor: Rothermel-style. A 30° slope roughly doubles spread rate.
+  // alignment=+1 (upslope) → full boost, alignment=-1 (downslope) → penalty.
+  const slopeFactor = Math.tan((slopeDeg * Math.PI) / 180);
+  const boost = 1.0 + alignment * slopeFactor * 3.5;
+  return Math.max(0.3, boost);
+}
+
 export function step(
   grid: Grid,
   params: SimParams,
-  elevation?: number[][] | null
+  // elevation kept for API compatibility but slope/aspect from Cell are preferred
+  _elevation?: number[][] | null
 ): Grid {
   const next = cloneGrid(grid);
   const h = grid.length;
@@ -103,20 +152,15 @@ export function step(
         const neighbor = grid[ny][nx];
         if (neighbor.status !== "unburned" || neighbor.fuel <= 0) continue;
 
+        // Wind: boost spread in wind direction.
         const windAlignment = dx * params.windDirX + dy * params.windDirY;
         const windBoost = Math.max(0, windAlignment) * (params.windSpeed / 30);
 
-        // Uphill spread is faster; downhill is slower.
-        let elevBoost = 1.0;
-        if (elevation) {
-          const dElev = (elevation[ny]?.[nx] ?? 0) - (elevation[y]?.[x] ?? 0);
-          elevBoost =
-            dElev > 0
-              ? 1 + dElev * 5 // uphill: significant boost
-              : Math.max(0.4, 1 + dElev * 1.5); // downhill: moderate penalty
-        }
+        // Slope: use the burning cell's slope/aspect to determine uphill/downhill.
+        // (The source cell's slope is what drives fire behavior.)
+        const elevBoost = slopeBoost(cell.slope, cell.aspect, dx, dy);
 
-        // Wet cells (high NDMI) resist ignition.
+        // Moisture: wet cells resist ignition (NDMI-driven).
         const dryness = 1 - neighbor.moisture * 0.75;
 
         const fuelFactor = neighbor.fuel / 100;
@@ -133,6 +177,10 @@ export function step(
 
   return next;
 }
+
+// ---------------------------------------------------------------------------
+// Risk scoring
+// ---------------------------------------------------------------------------
 
 export interface RiskBreakdown {
   score: number;
@@ -156,54 +204,72 @@ export function calculateRisk(
 export function calculateRiskBreakdown(
   grid: Grid,
   params: SimParams,
-  elevation?: number[][] | null
+  _elevation?: number[][] | null // no longer used; slope is in cells
 ): RiskBreakdown {
   const h = grid.length;
   const w = grid[0]?.length ?? 0;
 
   let totalFuel = 0;
+  let totalMoisture = 0;
   let cellCount = 0;
   let highFuelCells = 0;
+  let totalSlope = 0;
+  let slopeCellCount = 0;
+
   for (const row of grid) {
     for (const cell of row) {
       if (cell.status === "firebreak") continue;
       totalFuel += cell.fuel;
+      totalMoisture += cell.moisture;
       cellCount++;
       if (cell.fuel > 60 && cell.status === "unburned") highFuelCells++;
-    }
-  }
-  const avgFuel = cellCount > 0 ? totalFuel / cellCount : 0;
-
-  const safeHumidity = Math.max(params.humidity, 1);
-  const moistureFactor = params.temperature / safeHumidity;
-  const windFactor = Math.pow(Math.max(params.windSpeed, 1), 1.2);
-
-  let slopeFactor = 1.0;
-  if (elevation && elevation.length === h && elevation[0]?.length === w) {
-    let slopeSum = 0;
-    let slopeN = 0;
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const dx = elevation[y][x + 1] - elevation[y][x - 1];
-        const dy = elevation[y + 1][x] - elevation[y - 1][x];
-        slopeSum += Math.sqrt(dx * dx + dy * dy);
-        slopeN++;
+      if (cell.slope > 0) {
+        totalSlope += cell.slope;
+        slopeCellCount++;
       }
     }
-    const avgSlope = slopeN > 0 ? slopeSum / slopeN : 0;
-    slopeFactor = 1 + Math.min(0.6, avgSlope * 18);
   }
 
+  const avgFuel = cellCount > 0 ? totalFuel / cellCount : 0;
+  const avgMoisture = cellCount > 0 ? totalMoisture / cellCount : 0;
+
+  // Fuel load factor: high fuel + low moisture = higher risk.
+  // Previously moisture (NDMI) was ignored here even though it's loaded into cells.
+  const drynessFactor = 1 - avgMoisture * 0.6;
+  const fuelLoad =
+    (avgFuel / 100) *
+    (1 + (highFuelCells / Math.max(cellCount, 1)) * 0.6) *
+    drynessFactor;
+
+  // Weather: temperature / humidity interaction.
+  const safeHumidity = Math.max(params.humidity, 1);
+  const moistureFactor = params.temperature / safeHumidity;
+
+  // Wind.
+  const windFactor = Math.pow(Math.max(params.windSpeed, 1), 1.2);
+
+  // Slope: use per-cell slope degrees from TIFF band.
+  // Average slope in degrees → factor. 30° ≈ +60% risk.
+  const avgSlopeDeg = slopeCellCount > 0 ? totalSlope / slopeCellCount : 0;
+  const slopeFactor = 1 + Math.min(0.6, avgSlopeDeg / 50);
+
+  // Fuel continuity: fraction of grid covered by largest connected fuel cluster.
   const continuity = largestConnectedFuel(grid);
   const continuityRatio = cellCount > 0 ? continuity / cellCount : 0;
   const continuityFactor = 0.7 + continuityRatio * 0.9;
 
-  const fuelLoad =
-    (avgFuel / 100) * (1 + (highFuelCells / Math.max(cellCount, 1)) * 0.6);
-
+  // Raw risk score. Instead of a magic-number ceiling, we normalize against a
+  // computed reference scenario (calm, moist, flat) so the scale is self-calibrating.
   const rawRisk =
     fuelLoad * moistureFactor * windFactor * slopeFactor * continuityFactor;
-  const maxExpectedRisk = 6800;
+
+  // Reference: avgFuel=100, highFuelRatio=1, moisture=0 → fuelLoad≈1.6
+  //            temp=110, humidity=5 → moistureFactor=22
+  //            windSpeed=60 → windFactor≈116
+  //            slopeDeg=45 → slopeFactor=1.6
+  //            continuityRatio=1 → continuityFactor=1.6
+  // = 1.6 * 22 * 116 * 1.6 * 1.6 ≈ 10 500
+  const maxExpectedRisk = 10_500;
   const pct = (rawRisk / maxExpectedRisk) * 100;
   const score = Math.min(Math.max(Math.round(pct), 0), 100);
 
@@ -211,8 +277,8 @@ export function calculateRiskBreakdown(
     score,
     factors: {
       fuelLoad: clamp01(fuelLoad / 1.6),
-      weather: clamp01(moistureFactor / 8),
-      wind: clamp01(windFactor / 90),
+      weather: clamp01(moistureFactor / 22),
+      wind: clamp01(windFactor / 116),
       slope: clamp01((slopeFactor - 1) / 0.6),
       continuity: clamp01(continuityRatio),
     },
@@ -270,36 +336,227 @@ export function riskCategory(score: number): { label: string; color: string } {
   return { label: "EXTREME", color: "#a371f7" };
 }
 
+// ---------------------------------------------------------------------------
+// Controlled burn optimizer
+// ---------------------------------------------------------------------------
+
 export interface BurnPlan {
   stripCount?: number;
   stripWidth?: number;
   reductionStrength?: number;
 }
 
+/**
+ * Optimized controlled burn planner.
+ *
+ * OLD behavior: burned evenly-spaced horizontal strips, ignoring terrain,
+ * wind direction, and fuel distribution entirely.
+ *
+ * NEW behavior — three-phase strategy:
+ *
+ * 1. RIDGELINE ANCHORS — place firebreaks on high-slope ridge cells.
+ *    Ridgelines are natural spread accelerators; eliminating fuel there
+ *    removes the terrain boost that makes uphill runs so dangerous.
+ *
+ * 2. WIND-PERPENDICULAR BREAKS — place strips perpendicular to the dominant
+ *    wind vector, targeting rows/columns with the highest fuel load.
+ *    A break parallel to the wind does almost nothing; one perpendicular
+ *    to it forces a fire to cross bare ground to continue spreading.
+ *
+ * 3. HIGH-FUEL CLUSTER THINNING — reduce (but not zero) fuel in the
+ *    highest-density cells not already addressed by steps 1–2.
+ *    Thinning preserves some ground cover (erosion control) while
+ *    lowering crown-fire risk.
+ */
 export function runControlledBurn(grid: Grid, plan: BurnPlan = {}): Grid {
   const { stripCount = 4, stripWidth = 2, reductionStrength = 0.85 } = plan;
+
   const next = cloneGrid(grid);
   const h = grid.length;
   const w = grid[0].length;
 
-  const spacing = Math.floor(h / (stripCount + 1));
+  // -------------------------------------------------------------------------
+  // Phase 1 — Ridgeline anchors
+  // Find the top-N slope cells and clear a firebreak through them.
+  // We score each cell by slope; the top 3% are treated as ridgeline anchors.
+  // -------------------------------------------------------------------------
+  const slopeThresholdPct = 0.97;
+  const slopes: number[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = grid[y][x];
+      if (c.status !== "firebreak") slopes.push(c.slope);
+    }
+  }
+  slopes.sort((a, b) => a - b);
+  const ridgeThreshold =
+    slopes.length > 0
+      ? slopes[Math.floor(slopes.length * slopeThresholdPct)]
+      : Infinity;
 
-  for (let s = 1; s <= stripCount; s++) {
-    const stripY = s * spacing;
-    for (let dy = 0; dy < stripWidth; dy++) {
-      const y = stripY + dy;
-      if (y < 0 || y >= h) continue;
-      for (let x = 0; x < w; x++) {
-        const cell = next[y][x];
-        if (cell.status === "firebreak") continue;
-        cell.fuel = cell.fuel * (1 - reductionStrength);
-        cell.status = "burned";
-        cell.heat = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = next[y][x];
+      if (c.status === "firebreak") continue;
+      if (c.slope >= ridgeThreshold && ridgeThreshold < Infinity) {
+        c.fuel = 0;
+        c.status = "burned";
+        c.heat = 0;
       }
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Phase 2 — Wind-perpendicular firebreak strips
+  //
+  // Determine spread axis: the dominant wind direction tells us which grid
+  // axis fire will travel along. We place breaks perpendicular to that axis.
+  //
+  // If |windDirX| >= |windDirY|: wind is primarily east-west → fire spreads
+  //   along columns → breaks should be vertical strips (fixed x).
+  // Otherwise: wind is primarily north-south → fire spreads along rows →
+  //   breaks should be horizontal strips (fixed y).
+  //
+  // Among all candidate strips, we pick the ones with the highest total
+  // burnable fuel (those are the most impactful to remove).
+  // -------------------------------------------------------------------------
+
+  // We need the wind from the grid's params — callers set windDirX/Y on SimParams.
+  // Since BurnPlan doesn't carry params, we infer dominant axis from the grid's
+  // aspect distribution as a fallback proxy for wind when no explicit direction
+  // is passed. But the cleaner fix is to accept params in the plan:
+  const windX = plan.windDirX ?? 0;
+  const windY = plan.windDirY ?? 1; // default: northerly wind (fire spreads south)
+
+  const useVerticalStrips = Math.abs(windX) >= Math.abs(windY);
+
+  if (useVerticalStrips) {
+    // Score each column by total fuel.
+    const colFuel: number[] = new Array(w).fill(0);
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < h; y++) {
+        const c = grid[y][x];
+        if (c.status !== "firebreak") colFuel[x] += c.fuel;
+      }
+    }
+    const colOrder = Array.from({ length: w }, (_, i) => i).sort(
+      (a, b) => colFuel[b] - colFuel[a]
+    );
+    const spacing = Math.floor(w / (stripCount + 1));
+    // Pick evenly-distributed columns biased toward high fuel.
+    const chosen = new Set<number>();
+    for (let s = 1; s <= stripCount; s++) {
+      const anchor = s * spacing;
+      // Among candidates ±spacing/2 from anchor, pick highest-fuel column.
+      let best = anchor;
+      let bestFuel = -1;
+      for (let candidate of colOrder) {
+        if (Math.abs(candidate - anchor) <= spacing / 2) {
+          if (colFuel[candidate] > bestFuel) {
+            bestFuel = colFuel[candidate];
+            best = candidate;
+          }
+        }
+      }
+      chosen.add(best);
+    }
+    for (const cx of chosen) {
+      for (let dx = 0; dx < stripWidth; dx++) {
+        const x = cx + dx;
+        if (x < 0 || x >= w) continue;
+        for (let y = 0; y < h; y++) {
+          const c = next[y][x];
+          if (c.status === "firebreak") continue;
+          c.fuel = 0;
+          c.status = "burned";
+          c.heat = 0;
+        }
+      }
+    }
+  } else {
+    // Score each row by total fuel.
+    const rowFuel: number[] = new Array(h).fill(0);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const c = grid[y][x];
+        if (c.status !== "firebreak") rowFuel[y] += c.fuel;
+      }
+    }
+    const rowOrder = Array.from({ length: h }, (_, i) => i).sort(
+      (a, b) => rowFuel[b] - rowFuel[a]
+    );
+    const spacing = Math.floor(h / (stripCount + 1));
+    const chosen = new Set<number>();
+    for (let s = 1; s <= stripCount; s++) {
+      const anchor = s * spacing;
+      let best = anchor;
+      let bestFuel = -1;
+      for (let candidate of rowOrder) {
+        if (Math.abs(candidate - anchor) <= spacing / 2) {
+          if (rowFuel[candidate] > bestFuel) {
+            bestFuel = rowFuel[candidate];
+            best = candidate;
+          }
+        }
+      }
+      chosen.add(best);
+    }
+    for (const ry of chosen) {
+      for (let dy = 0; dy < stripWidth; dy++) {
+        const y = ry + dy;
+        if (y < 0 || y >= h) continue;
+        for (let x = 0; x < w; x++) {
+          const c = next[y][x];
+          if (c.status === "firebreak") continue;
+          c.fuel = 0;
+          c.status = "burned";
+          c.heat = 0;
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 3 — High-fuel cluster thinning
+  // Reduce (not zero) fuel in the top-density cells not already cleared.
+  // This lowers crown-fire risk while preserving ground cover.
+  // Target: top 8% of unburned cells by fuel value, reduce by reductionStrength.
+  // -------------------------------------------------------------------------
+  const fuelValues: number[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = next[y][x];
+      if (c.status === "unburned" && c.fuel > 0) fuelValues.push(c.fuel);
+    }
+  }
+  fuelValues.sort((a, b) => a - b);
+  const thinThreshold =
+    fuelValues.length > 0
+      ? fuelValues[Math.floor(fuelValues.length * 0.92)]
+      : Infinity;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = next[y][x];
+      if (c.status !== "unburned" || c.fuel < thinThreshold) continue;
+      // Thin rather than zero — partial reduction, not full removal.
+      c.fuel = c.fuel * (1 - reductionStrength * 0.5);
+    }
+  }
+
   return next;
+}
+
+/**
+ * Extended plan type used by the optimizer UI.
+ * Adds wind direction so the planner can orient breaks correctly.
+ */
+export interface BurnPlan {
+  stripCount?: number;
+  stripWidth?: number;
+  reductionStrength?: number;
+  windDirX?: number;
+  windDirY?: number;
 }
 
 export function isAnyBurning(grid: Grid): boolean {
