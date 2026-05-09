@@ -57,7 +57,13 @@ export function FireCanvas({
         const py = y * cellSize;
 
         if (cell.status === "unburned") {
-          if (!bgImage) {
+          if (cell.water) {
+            // Water: rich blue, slightly transparent so NDVI texture shows through
+            ctx.fillStyle = bgImage
+              ? "rgba(26, 90, 170, 0.68)"
+              : "rgb(30, 80, 160)";
+            ctx.fillRect(px, py, cellSize, cellSize);
+          } else if (!bgImage) {
             const fuelPct = cell.fuel / 100;
             const r = Math.round(120 - fuelPct * 80);
             const g = Math.round(130 - fuelPct * 20);

@@ -13,6 +13,7 @@ export interface Cell {
   status: CellStatus;
   heat: number;
   residential?: boolean;
+  water?: boolean;
 }
 
 export type Grid = Cell[][];
@@ -487,10 +488,11 @@ export function placeSettlements(
   const w = next[0].length;
   const settlements: Settlement[] = [];
 
-  // Helper: mark a cell as residential if it's in-bounds and not a firebreak
+  // Helper: mark a cell as residential if it's in-bounds, not a firebreak, and not water
   function stamp(x: number, y: number, cells: Array<{ x: number; y: number }>) {
     if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) return;
     if (next[y][x].status === "firebreak") return;
+    if (next[y][x].water) return; // never place structures on water
     next[y][x] = {
       ...next[y][x],
       status: "residential",

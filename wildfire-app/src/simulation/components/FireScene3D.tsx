@@ -391,7 +391,13 @@ function useBurnOverlay(grid: Grid): THREE.Texture | null {
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const cell = grid[y][x];
-      if (cell.status === "burned" || cell.status === "residential_destroyed") {
+      if (cell.water) {
+        ctx.fillStyle = "rgba(26, 90, 160, 0.72)";
+        ctx.fillRect(x, y, 1, 1);
+      } else if (
+        cell.status === "burned" ||
+        cell.status === "residential_destroyed"
+      ) {
         ctx.fillStyle = "rgba(20, 12, 8, 0.92)";
         ctx.fillRect(x, y, 1, 1);
       } else if (cell.status === "firebreak") {
@@ -640,7 +646,8 @@ function Trees({
         if (
           cell.fuel > 55 &&
           cell.status !== "firebreak" &&
-          !cell.residential
+          !cell.residential &&
+          !cell.water
         ) {
           if (rand() < 0.45) {
             const elevFrac = Math.min(1, elevation[y]?.[x] ?? 0);
@@ -838,7 +845,7 @@ function Buildings({
     };
     for (let gy = 0; gy < h; gy++) {
       for (let gx = 0; gx < w; gx++) {
-        if (grid[gy]?.[gx]?.residential) {
+        if (grid[gy]?.[gx]?.residential && !grid[gy]?.[gx]?.water) {
           entries.push({
             x: gx,
             y: gy,
