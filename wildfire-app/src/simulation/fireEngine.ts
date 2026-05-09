@@ -186,97 +186,6 @@ export function step(
   return next;
 }
 
-export function stepControlled(
-  grid: Grid,
-  params: SimParams,
-  elevation?: number[][] | null
-): Grid {
-  const next = cloneGrid(grid);
-  const h = grid.length;
-  const w = grid[0].length;
-
-  const BURNOUT_RATE = 0.018;
-  const HEAT_DECAY = 0.025;
-  const SPREAD_SUPPRESSION = 0.55;
-
-  const humidityFactor = 1 - params.humidity / 100;
-  const tempFactor = Math.max(0.2, params.temperature / 100);
-
-  const CARDINAL: Array<[number, number, number]> = [
-    [0, -1, 1.0],
-    [-1, 0, 1.0],
-    [1, 0, 1.0],
-    [0, 1, 1.0],
-  ];
-  const DIAGONAL: Array<[number, number, number]> = [
-    [-1, -1, 0.3],
-    [1, -1, 0.3],
-    [-1, 1, 0.3],
-    [1, 1, 0.3],
-  ];
-  const ALL_NEIGHBORS = [...CARDINAL, ...DIAGONAL];
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const cell = grid[y][x];
-      const isBurning =
-        cell.status === "burning" || cell.status === "residential_burning";
-      if (!isBurning) continue;
-
-      const burnRate = cell.residential ? 0.025 : 0.02;
-      const consume = burnRate + cell.heat * BURNOUT_RATE;
-      next[y][x].fuel = Math.max(0, cell.fuel - consume * 100);
-      next[y][x].heat = Math.max(0, cell.heat - HEAT_DECAY);
-
-      if (next[y][x].fuel <= 0 || next[y][x].heat <= 0) {
-        next[y][x].status = cell.residential
-          ? "residential_destroyed"
-          : "burned";
-        next[y][x].heat = 0;
-      }
-
-      for (const [dx, dy, dirWeight] of ALL_NEIGHBORS) {
-        const nx = x + dx;
-        const ny = y + dy;
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-
-        const neighbor = grid[ny][nx];
-        // In a controlled burn, fire crews actively protect residential zones
-        if (neighbor.status === "residential") continue;
-        if (neighbor.status !== "unburned" || neighbor.fuel <= 0) continue;
-
-        const windAlignment = dx * params.windDirX + dy * params.windDirY;
-        const windBoost = Math.max(0, windAlignment) * (params.windSpeed / 30);
-
-        let elevBoost = 1.0;
-        if (elevation) {
-          const dElev = (elevation[ny]?.[nx] ?? 0) - (elevation[y]?.[x] ?? 0);
-          elevBoost =
-            dElev > 0 ? 1 + dElev * 5 : Math.max(0.4, 1 + dElev * 1.5);
-        }
-
-        const dryness = 1 - neighbor.moisture * 0.75;
-        const fuelFactor = neighbor.fuel / 100;
-        const baseProb = 0.08 * fuelFactor * tempFactor * humidityFactor;
-        const prob =
-          baseProb *
-          (1 + windBoost * 2.0) *
-          elevBoost *
-          dryness *
-          SPREAD_SUPPRESSION *
-          dirWeight;
-
-        if (Math.random() < prob) {
-          next[ny][nx].status = "burning";
-          next[ny][nx].heat = 0.5 + Math.random() * 0.3;
-        }
-      }
-    }
-  }
-
-  return next;
-}
-
 export interface RiskBreakdown {
   score: number;
   factors: {
@@ -453,6 +362,32 @@ export function runControlledBurn(grid: Grid, plan: BurnPlan = {}): Grid {
   }
 
   return next;
+}
+
+/**
+ * Extended plan type used by the optimizer UI.
+ * Adds wind direction so the planner can orient breaks correctly.
+ */
+export interface BurnPlan {
+  stripCount?: number;
+  stripWidth?: number;
+  reductionStrength?: number;
+  windDirX?: number;
+  windDirY?: number;
+}
+
+// Like step() but with reduced spread probability to simulate a managed/controlled burn.
+export function stepControlled(
+  grid: Grid,
+  params: SimParams,
+  elevation?: number[][] | null
+): Grid {
+  const reducedParams: SimParams = {
+    ...params,
+    windSpeed: params.windSpeed * 0.4,
+    temperature: Math.max(20, params.temperature * 0.7),
+  };
+  return step(grid, reducedParams, elevation);
 }
 
 export function isAnyBurning(grid: Grid): boolean {
