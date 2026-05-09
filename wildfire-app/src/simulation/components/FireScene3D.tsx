@@ -235,6 +235,7 @@ function Water({ planeH }: { planeH: number }) {
     <mesh rotation-x={-Math.PI / 2} position={[0, WATER_LEVEL, 0]} receiveShadow>
       <planeGeometry args={[PLANE_SIZE, planeH]} />
       <meshStandardMaterial
+<<<<<<< Updated upstream
         color="#2b4664"
         transparent
         opacity={0.6}
@@ -242,6 +243,15 @@ function Water({ planeH }: { planeH: number }) {
         metalness={0.55}
         emissive="#0e1c2a"
         emissiveIntensity={0.1}
+=======
+        color="#1a6aaa"
+        transparent
+        opacity={0.65}
+        roughness={0.1}
+        metalness={0.4}
+        emissive="#0a3060"
+        emissiveIntensity={0.15}
+>>>>>>> Stashed changes
       />
     </mesh>
   );

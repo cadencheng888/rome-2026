@@ -57,6 +57,11 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
   const [activeTiffUrl, setActiveTiffUrl] = useState<string | null>(null);
 
   const tickRef = useRef<number | null>(null);
+<<<<<<< Updated upstream
+=======
+  const elevationRef = useRef(elevation);
+  useEffect(() => { elevationRef.current = elevation; }, [elevation]);
+>>>>>>> Stashed changes
 
   // Load from tiffPath when source === 'tiff'
   useEffect(() => {
@@ -157,7 +162,11 @@ export default function SimulationView({ locationName, tiffPath }: Props) {
       return;
     }
     tickRef.current = window.setInterval(() => {
+<<<<<<< Updated upstream
       setGrid((g) => (g ? step(g, params) : g));
+=======
+      setGrid((g) => (g ? step(g, params, elevationRef.current) : g));
+>>>>>>> Stashed changes
     }, TICK_MS);
     return () => {
       if (tickRef.current) clearInterval(tickRef.current);

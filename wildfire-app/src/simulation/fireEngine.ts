@@ -2,6 +2,10 @@ export type CellStatus = 'unburned' | 'burning' | 'burned' | 'firebreak';
 
 export interface Cell {
   fuel: number;
+<<<<<<< Updated upstream
+=======
+  moisture: number;   // 0 = dry (ignites easily), 1 = wet (resists fire) — driven by NDMI band
+>>>>>>> Stashed changes
   status: CellStatus;
   heat: number;
 }
@@ -33,6 +37,10 @@ export function createGrid(opts: GridOptions): Grid {
       const hasFuel = !isBreak && Math.random() < fuelDensity;
       row.push({
         fuel: hasFuel ? 60 + Math.random() * 40 : 0,
+<<<<<<< Updated upstream
+=======
+        moisture: 0,
+>>>>>>> Stashed changes
         status: isBreak ? 'firebreak' : 'unburned',
         heat: 0,
       });
@@ -62,7 +70,11 @@ const NEIGHBORS: Array<[number, number]> = [
   [-1, 1],  [0, 1],  [1, 1],
 ];
 
+<<<<<<< Updated upstream
 export function step(grid: Grid, params: SimParams): Grid {
+=======
+export function step(grid: Grid, params: SimParams, elevation?: number[][] | null): Grid {
+>>>>>>> Stashed changes
   const next = cloneGrid(grid);
   const h = grid.length;
   const w = grid[0].length;
@@ -96,9 +108,27 @@ export function step(grid: Grid, params: SimParams): Grid {
           dx * params.windDirX + dy * params.windDirY;
         const windBoost = Math.max(0, windAlignment) * (params.windSpeed / 30);
 
+<<<<<<< Updated upstream
         const fuelFactor = neighbor.fuel / 100;
         const baseProb = 0.08 * fuelFactor * tempFactor * humidityFactor;
         const prob = baseProb * (1 + windBoost * 2.0);
+=======
+        // Uphill spread is faster; downhill is slower.
+        let elevBoost = 1.0;
+        if (elevation) {
+          const dElev = (elevation[ny]?.[nx] ?? 0) - (elevation[y]?.[x] ?? 0);
+          elevBoost = dElev > 0
+            ? 1 + dElev * 5          // uphill: significant boost
+            : Math.max(0.4, 1 + dElev * 1.5); // downhill: moderate penalty
+        }
+
+        // Wet cells (high NDMI) resist ignition.
+        const dryness = 1 - neighbor.moisture * 0.75;
+
+        const fuelFactor = neighbor.fuel / 100;
+        const baseProb = 0.08 * fuelFactor * tempFactor * humidityFactor;
+        const prob = baseProb * (1 + windBoost * 2.0) * elevBoost * dryness;
+>>>>>>> Stashed changes
 
         if (Math.random() < prob) {
           next[ny][nx].status = 'burning';

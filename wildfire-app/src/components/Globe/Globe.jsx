@@ -18,63 +18,99 @@ export const FIRE_LOCATIONS = [
     name: "Paradise, CA",
     lat: 39.7596,
     lng: -121.6219,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/paradise.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "lahaina",
     name: "Lahaina, Maui, HI",
     lat: 20.8783,
     lng: -156.6825,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/lahaina.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "gatlinburg",
     name: "Gatlinburg, TN",
     lat: 35.7143,
     lng: -83.5102,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/gatlinburg.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "fort-mcmurray",
     name: "Fort McMurray, Canada",
     lat: 56.7265,
     lng: -111.3803,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/fort-mcmurray.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "valparaiso",
     name: "Valparaiso, Chile",
     lat: -33.0472,
     lng: -71.6127,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/valparaiso.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "mati",
     name: "Mati, Greece",
     lat: 38.0717,
     lng: 23.9691,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/mati.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "blue-mountains",
     name: "Blue Mountains, Australia",
     lat: -33.6994,
     lng: 150.5684,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/blue-mountains.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "amazon",
     name: "Amazon Basin, Brazil",
     lat: -3.4653,
     lng: -62.2159,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/amazon.tif",
+>>>>>>> Stashed changes
   },
   {
     id: "krasnoyarsk",
     name: "Krasnoyarsk, Russia",
     lat: 60.0,
     lng: 97.0,
+<<<<<<< Updated upstream
     tiffPath: null,
+=======
+    tiffPath: "/tiffs/krasnoyarsk.tif",
+>>>>>>> Stashed changes
   },
 ];
 
