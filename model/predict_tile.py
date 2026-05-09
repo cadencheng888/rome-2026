@@ -8,6 +8,7 @@
 # - Sliding-window inference
 # - Overlap feather blending
 # - Multi-region batch processing
+# - Binary burn-region outputs
 # - GeoTIFF preservation
 # - MPS / CUDA support
 #
@@ -15,7 +16,7 @@
 # - 10-band GeoTIFF
 #
 # Output:
-# - 1-band burn suitability heatmap
+# - 1-band binary burn mask
 #
 # ============================================
 
@@ -294,6 +295,12 @@ def main() -> None:
     )
 
     ap.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5
+    )
+
+    ap.add_argument(
         "--plot",
         action="store_true"
     )
@@ -356,6 +363,14 @@ def main() -> None:
 
         with rasterio.open(tif_path) as src:
 
+            if src.count < 10:
+
+                print(
+                    f"Skipping {tif_path.name}"
+                )
+
+                continue
+
             x = src.read(
                 list(range(1, 11))
             ).astype(np.float32)
@@ -388,6 +403,15 @@ def main() -> None:
 
 
         # ============================================
+        # THRESHOLDING
+        # ============================================
+
+        burn_mask = (
+            pred >= args.threshold
+        ).astype(np.float32)
+
+
+        # ============================================
         # OUTPUT SAVE
         # ============================================
 
@@ -406,7 +430,8 @@ def main() -> None:
 
         profile_out.update(
             count=1,
-            dtype="float32"
+            dtype="float32",
+            nodata=0
         )
 
         with rasterio.open(
@@ -416,12 +441,86 @@ def main() -> None:
         ) as dst:
 
             dst.write(
-                pred.astype(np.float32),
+                burn_mask,
                 1
             )
 
         print(f"Saved: {out_path}")
 
 
+        # ============================================
+        # VISUALIZATION
+        # ============================================
+
+        if args.plot:
+
+            rgb = np.stack(
+                [x[2], x[1], x[0]],
+                axis=-1
+            )
+
+            rgb = np.clip(
+                rgb,
+                0.0,
+                1.0
+            )
+
+            plt.figure(
+                figsize=(18, 6)
+            )
+
+
+            # RGB
+            plt.subplot(1, 3, 1)
+
+            plt.imshow(rgb)
+
+            plt.title("RGB")
+
+            plt.axis("off")
+
+
+            # Continuous prediction
+            plt.subplot(1, 3, 2)
+
+            plt.imshow(
+                pred,
+                cmap="inferno",
+                vmin=0,
+                vmax=1
+            )
+
+            plt.title(
+                "Burn Suitability"
+            )
+
+            plt.colorbar()
+
+            plt.axis("off")
+
+
+            # Binary overlay
+            plt.subplot(1, 3, 3)
+
+            plt.imshow(rgb)
+
+            plt.imshow(
+                burn_mask,
+                cmap="Greens",
+                alpha=0.45
+            )
+
+            plt.title(
+                f"Burn Regions ≥ {args.threshold}"
+            )
+
+            plt.axis("off")
+
+            plt.tight_layout()
+
+            plt.show()
+
+
 if __name__ == "__main__":
+
     main()
