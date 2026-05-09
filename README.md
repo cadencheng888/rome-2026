@@ -39,7 +39,7 @@ What makes us unique compared to other projects that try to visualize and model 
 
 Our group understands this immensely. First off, the data and tools we use are purely open source. We utilize Google Earth Engine, Globe.gl, NDVI/NDMI datasets, and population census data to build a simulator visualizer that lets anybody understand that controlled fires are beneficial. This bridges the knowledge gap between everyday citizens and experts. People who may not have experience with ecosystems or data science can use our visualizer to better understand how controlled fires help prevent devastating wildfires.
 
-WILDFIRE VS CONTROLLED BURN 
+### WILDFIRE VS CONTROLLED BURN 
 
 Our leverage of open source tools solves a very real societal challenge: the fact that knowledge is often gated by experience or access to tools. In depth research and visualization is often performed by experts with access to powerful computational tools. However, our simulator is not only lightweight, but also very intuitive. Because of this, anyone with a device can utilize re:scorched to explore the science and strategy behind controlled burns, and how they are beneficial to reducing wildfire risk.
 
