@@ -3,15 +3,6 @@ import type { Cell, Grid } from "./fireEngine";
 /**
  * Loads an NDVI-colorized PNG (Sentinel Hub visualization output) and
  * converts it into a fire-engine Grid by sampling per-pixel color.
- *
- * The Sentinel Hub default NDVI palette roughly maps:
- *   dark green       -> high NDVI (forest)        -> high fuel
- *   bright green     -> moderate-high NDVI        -> high fuel
- *   yellow/yellow-green -> moderate NDVI (grass)  -> medium fuel
- *   orange / red     -> low NDVI (sparse / dry)   -> low fuel
- *   white            -> very low NDVI (bare soil) -> very low fuel
- *   transparent (a≈0) -> no data / outside scene  -> firebreak
- *   strong blue      -> water                     -> firebreak
  */
 export async function loadFuelFromImage(
   url: string,
@@ -23,12 +14,8 @@ export async function loadFuelFromImage(
 }
 
 /**
- * Reduces an NDVI-colorized ImageData buffer to a fire-engine Grid by
- * averaging the source pixels covered by each grid cell.
- *
- * Shared by the URL path (PNG in /public) and the in-app upload path
- * (canvas painted from a parsed GeoTIFF), so they always agree on what
- * counts as fuel, water, and no-data.
+ * Reduces an NDVI-colorized ImageData buffer to a fire-engine Grid.
+ * Slope and aspect default to 0 (unavailable from image path).
  */
 export function gridFromImageData(
   imgData: ImageData,
@@ -61,15 +48,12 @@ export function gridFromImageData(
           const b = data[idx + 2];
           const a = data[idx + 3];
           totalPixels++;
-
           if (a < 32) continue;
-
           if (isWater(r, g, b)) {
             waterPixels++;
             validPixels++;
             continue;
           }
-
           fuelSum += colorToFuel(r, g, b);
           validPixels++;
         }
@@ -93,11 +77,10 @@ export function gridFromImageData(
         status = fuel < 5 ? "firebreak" : "unburned";
       }
 
-      row.push({ fuel, moisture: 0, status, heat: 0 });
+      row.push({ fuel, moisture: 0, slope: 0, aspect: 0, status, heat: 0 });
     }
     grid.push(row);
   }
-
   return grid;
 }
 
@@ -123,24 +106,58 @@ async function loadImageData(url: string): Promise<ImageData> {
 }
 
 /**
- * Loads an image and returns a normalized elevation grid (0-1 per cell)
- * using the red channel as the height signal. Bright pixels = high elevation.
+ * Builds a normalized (0–1) elevation grid directly from a Float32 band array,
+ * avoiding the lossy elevation → 8-bit grayscale → float round-trip.
  *
- * For the NDVI image: white snow peaks → high, green forest → low,
- * which roughly matches actual topography.
+ * Previously, parseTiff painted elevation to an 8-bit grayscale ImageData and
+ * then read it back here via elevationFromImageData. That quantizes potentially
+ * thousands of meters of elevation range into 256 levels (~4m resolution for
+ * a 1000m span), discarding sub-step variation and introducing banding
+ * artifacts in the displacement map.
  */
-export async function loadElevationMap(
-  url: string,
+export function elevationFromFloat32(
+  elevBand: ArrayLike<number>,
+  pixelW: number,
+  pixelH: number,
   gridW: number,
-  gridH: number
-): Promise<number[][]> {
-  const data = await loadImageData(url);
-  return elevationFromImageData(data, gridW, gridH);
+  gridH: number,
+  eMin: number,
+  eMax: number
+): number[][] {
+  const span = eMax > eMin ? eMax - eMin : 1;
+  const blockW = pixelW / gridW;
+  const blockH = pixelH / gridH;
+  const result: number[][] = [];
+
+  for (let gy = 0; gy < gridH; gy++) {
+    const row: number[] = [];
+    for (let gx = 0; gx < gridW; gx++) {
+      const x0 = Math.floor(gx * blockW);
+      const y0 = Math.floor(gy * blockH);
+      const x1 = Math.min(pixelW, Math.floor((gx + 1) * blockW));
+      const y1 = Math.min(pixelH, Math.floor((gy + 1) * blockH));
+      let sum = 0;
+      let n = 0;
+      for (let py = y0; py < y1; py++) {
+        for (let px = x0; px < x1; px++) {
+          const v = elevBand[py * pixelW + px];
+          if (Number.isFinite(v)) {
+            sum += (v - eMin) / span;
+            n++;
+          }
+        }
+      }
+      row.push(n > 0 ? Math.max(0, Math.min(1, sum / n)) : 0);
+    }
+    result.push(row);
+  }
+  return result;
 }
 
 /**
- * Reduces a grayscale-elevation ImageData buffer to a normalized (0-1) grid
- * by averaging the red channel of the source pixels each grid cell covers.
+ * Legacy path: derive elevation from an 8-bit grayscale ImageData.
+ * Kept for backwards compatibility with callers that don't have the float band.
+ * Prefer elevationFromFloat32 whenever the raw TIFF band is available.
  */
 export function elevationFromImageData(
   imgData: ImageData,
@@ -176,8 +193,8 @@ export function elevationFromImageData(
 }
 
 /**
- * Generates a synthetic elevation grid using simple noise — used for the
- * RANDOM FOREST mode where there's no satellite image to derive heights from.
+ * Generates a synthetic elevation grid using simple noise.
+ * Used for RANDOM FOREST mode where there's no satellite image.
  */
 export function syntheticElevationMap(
   gridW: number,
@@ -199,14 +216,20 @@ export function syntheticElevationMap(
 }
 
 /**
- * Builds a fire-engine Grid directly from raw 7-band GeoTIFF arrays.
- * Fuel is derived from NLCD land-cover class scaled by NDVI density.
- * Moisture is derived from NDMI: high NDMI (wet) → moisture≈1, low NDMI (dry) → moisture≈0.
+ * Builds a fire-engine Grid from raw 7-band GeoTIFF arrays, including
+ * the slope and aspect bands that were previously discarded.
+ *
+ * - Fuel: NLCD land-cover scaled by NDVI vegetation density
+ * - Moisture: NDMI → 0 (dry) to 1 (wet)
+ * - Slope: degrees from TIFF Band 2 (was ignored before)
+ * - Aspect: degrees 0–360 from TIFF Band 3 (was ignored before)
  */
 export function gridFromBands(
   ndvi: ArrayLike<number>,
   ndmi: ArrayLike<number>,
   landCover: ArrayLike<number>,
+  slope: ArrayLike<number>, // NEW: Band 2, degrees
+  aspect: ArrayLike<number>, // NEW: Band 3, degrees 0-360
   pixelW: number,
   pixelH: number,
   gridW: number,
@@ -226,8 +249,11 @@ export function gridFromBands(
 
       let ndviSum = 0,
         ndmiSum = 0,
-        lcSum = 0,
-        count = 0,
+        lcSum = 0;
+      let slopeSum = 0,
+        aspectSinSum = 0,
+        aspectCosSum = 0;
+      let count = 0,
         waterCount = 0;
 
       for (let py = y0; py < y1; py++) {
@@ -236,17 +262,38 @@ export function gridFromBands(
           const n = ndvi[idx];
           if (!Number.isFinite(n)) continue;
           ndviSum += n;
+
           const m = ndmi[idx];
           ndmiSum += Number.isFinite(m) ? m : 0;
+
           const lc = landCover[idx];
           lcSum += lc;
           if (lc === 11) waterCount++;
+
+          const sl = slope[idx];
+          if (Number.isFinite(sl)) slopeSum += sl;
+
+          // Aspect: circular mean to handle 0/360 wraparound correctly.
+          const asp = aspect[idx];
+          if (Number.isFinite(asp)) {
+            const rad = (asp * Math.PI) / 180;
+            aspectSinSum += Math.sin(rad);
+            aspectCosSum += Math.cos(rad);
+          }
+
           count++;
         }
       }
 
       if (count === 0) {
-        row.push({ fuel: 0, moisture: 0, status: "firebreak", heat: 0 });
+        row.push({
+          fuel: 0,
+          moisture: 0,
+          slope: 0,
+          aspect: 0,
+          status: "firebreak",
+          heat: 0,
+        });
         continue;
       }
 
@@ -255,19 +302,31 @@ export function gridFromBands(
       const avgLc = Math.round(lcSum / count);
       const waterRatio = waterCount / count;
 
-      // Base fuel from land-cover type, scaled by NDVI vegetation density.
+      const avgSlope = slopeSum / count;
+      // Recover circular mean of aspect.
+      const avgAspect =
+        (Math.atan2(aspectSinSum / count, aspectCosSum / count) * 180) /
+        Math.PI;
+      const normalizedAspect = (avgAspect + 360) % 360;
+
       const baseFuel = landCoverToFuel(avgLc);
       const ndviScale = Math.max(0.2, Math.min(1.5, 0.5 + avgNdvi));
       const fuel = Math.max(0, Math.min(100, baseFuel * ndviScale));
 
-      // NDMI: -1..1 → moisture 0 (dry) to 1 (wet)
       const moisture = Math.max(0, Math.min(1, (avgNdmi + 1) / 2));
 
       const isWaterCell = waterRatio > 0.5 || avgLc === 11;
       const status: Cell["status"] =
         isWaterCell || fuel < 5 ? "firebreak" : "unburned";
 
-      row.push({ fuel: isWaterCell ? 0 : fuel, moisture, status, heat: 0 });
+      row.push({
+        fuel: isWaterCell ? 0 : fuel,
+        moisture,
+        slope: avgSlope,
+        aspect: normalizedAspect,
+        status,
+        heat: 0,
+      });
     }
     grid.push(row);
   }
@@ -275,7 +334,6 @@ export function gridFromBands(
 }
 
 // NLCD 2021 class → base fuel value (0-100).
-// Crown-fire fuels (evergreen/deciduous forest) score highest; developed and water score 0.
 function landCoverToFuel(nlcdClass: number): number {
   switch (nlcdClass) {
     case 11:
@@ -293,13 +351,13 @@ function landCoverToFuel(nlcdClass: number): number {
     case 41:
       return 75; // Deciduous Forest
     case 42:
-      return 85; // Evergreen Forest (high resin = crown fire risk)
+      return 85; // Evergreen Forest
     case 43:
       return 80; // Mixed Forest
     case 52:
-      return 65; // Shrub/Scrub (fast spread)
+      return 65; // Shrub/Scrub
     case 71:
-      return 50; // Herbaceous/Grassland (fastest spread, high cure rate)
+      return 50; // Herbaceous/Grassland
     case 81:
       return 40; // Hay/Pasture
     case 82:
@@ -317,16 +375,10 @@ function isWater(r: number, g: number, b: number): boolean {
   return b > r + 25 && b > g + 25 && b > 80;
 }
 
-/**
- * Maps a natural-satellite palette color to a fuel value 0-100.
- * The palette (see NDVI_RAMP in tiffLoader.ts) uses green = dense forest =
- * high fuel, tan/brown = bare soil = low fuel.  Green dominance → high fuel.
- */
 function colorToFuel(r: number, g: number, b: number): number {
   if (r > 235 && g > 235 && b > 235) return 8;
   if (r < 8 && g < 8 && b < 8) return 5;
-
   const denom = Math.max(r + g, 1);
-  const axis = (g - r) / denom; // ~ -1 (tan/red) … +1 (green forest)
+  const axis = (g - r) / denom;
   return Math.max(5, Math.min(100, 50 + axis * 80));
 }

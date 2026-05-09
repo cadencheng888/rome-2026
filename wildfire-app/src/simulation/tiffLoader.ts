@@ -1,6 +1,7 @@
 import { fromBlob } from "geotiff";
 import type { Grid } from "./fireEngine";
 import {
+  elevationFromFloat32,
   elevationFromImageData,
   gridFromImageData,
   gridFromBands,
@@ -19,20 +20,18 @@ export interface TiffTile {
 /**
  * Natural earth satellite palette. Blue = water, tan/brown = bare soil,
  * yellow-green = grassland/scrub, dark green = dense forest.
- * High NDVI → green (dense canopy = high fuel). satelliteLoader.colorToFuel
- * uses green dominance to recover fuel (green-dominant → high fuel).
  */
 const NDVI_RAMP: Array<[number, number, number, number]> = [
-  [-1.0, 15, 55, 130], // deep water blue
-  [-0.2, 80, 90, 100], // rocky / coastal gray
-  [0.0, 170, 150, 90], // sandy bare soil
-  [0.15, 155, 160, 85], // sparse scrub / khaki
-  [0.3, 120, 155, 65], // savanna / light grass
-  [0.45, 85, 140, 55], // grassland / shrub
-  [0.6, 55, 115, 40], // mixed vegetation
-  [0.75, 30, 90, 30], // woodland / forest
-  [0.9, 18, 65, 22], // dense forest
-  [1.0, 10, 45, 15], // very dense canopy
+  [-1.0, 15, 55, 130],
+  [-0.2, 80, 90, 100],
+  [0.0, 170, 150, 90],
+  [0.15, 155, 160, 85],
+  [0.3, 120, 155, 65],
+  [0.45, 85, 140, 55],
+  [0.6, 55, 115, 40],
+  [0.75, 30, 90, 30],
+  [0.9, 18, 65, 22],
+  [1.0, 10, 45, 15],
 ];
 
 function rampInterp(value: number): [number, number, number] {
@@ -76,26 +75,30 @@ export async function parseTiff(
   const isMultiBand = samplesPerPixel >= 7;
 
   const elevBand = rasters[0];
+  const slopeBand = isMultiBand ? rasters[1] : null; // degrees
+  const aspectBand = isMultiBand ? rasters[2] : null; // degrees 0-360
   const ndviBand = isMultiBand ? rasters[3] : rasters[1];
   const ndmiBand = isMultiBand ? rasters[4] : null;
   const landCoverBand = isMultiBand ? rasters[6] : null;
 
   if (!elevBand || !ndviBand) throw new Error("TIFF read returned empty bands");
 
-  // Build NDVI RGBA texture + elevation range in one pass.
+  // -------------------------------------------------------------------------
+  // Single pass: build NDVI RGBA texture and compute elevation range.
+  // -------------------------------------------------------------------------
   const rgba = new Uint8ClampedArray(width * height * 4);
-  const elevValid = new Uint8Array(width * height);
   let eMin = Infinity;
   let eMax = -Infinity;
 
   for (let i = 0; i < width * height; i++) {
     const e = elevBand[i];
     const n = ndviBand[i];
+
     if (Number.isFinite(e)) {
       if (e < eMin) eMin = e;
       if (e > eMax) eMax = e;
-      elevValid[i] = 1;
     }
+
     if (Number.isFinite(n)) {
       const [r, g, b] = rampInterp(n);
       rgba[i * 4] = r;
@@ -103,48 +106,65 @@ export async function parseTiff(
       rgba[i * 4 + 2] = b;
       rgba[i * 4 + 3] = 255;
     }
-    // else: alpha stays 0 → treated as no-data
-  }
-
-  // Grayscale elevation ImageData for displacement mapping.
-  const span = eMax > eMin ? eMax - eMin : 1;
-  const elevRgba = new Uint8ClampedArray(width * height * 4);
-  for (let i = 0; i < width * height; i++) {
-    if (!elevValid[i]) continue;
-    const v = Math.round(((elevBand[i] - eMin) / span) * 255);
-    elevRgba[i * 4] = v;
-    elevRgba[i * 4 + 1] = v;
-    elevRgba[i * 4 + 2] = v;
-    elevRgba[i * 4 + 3] = 255;
+    // else alpha stays 0 → treated as no-data
   }
 
   const ndviImageData = new ImageData(rgba, width, height);
-  const elevImageData = new ImageData(elevRgba, width, height);
-  const elevation = elevationFromImageData(elevImageData, gridW, gridH);
 
-  // Grid: use multi-band builder when all bands are available, else fall back.
-  let grid;
-  if (isMultiBand && ndmiBand && landCoverBand) {
+  // -------------------------------------------------------------------------
+  // Elevation grid — direct from float32 band (no 8-bit round-trip).
+  //
+  // The old approach converted elevation to an 8-bit grayscale ImageData and
+  // read it back. That quantizes a potentially >1000m elevation range into
+  // 256 steps (~4m per step for a 1000m span), introducing banding in the
+  // displacement map and coarsening the slope model. We now normalize directly
+  // from the float band, preserving full sub-meter precision.
+  // -------------------------------------------------------------------------
+  const elevation = elevationFromFloat32(
+    elevBand,
+    width,
+    height,
+    gridW,
+    gridH,
+    eMin,
+    eMax
+  );
+
+  // -------------------------------------------------------------------------
+  // Fire grid — multi-band path now forwards slope and aspect bands.
+  // Previously gridFromBands only received ndvi, ndmi, landCover, so
+  // slope and aspect were silently dropped and every cell got slope=0,
+  // aspect=0. This meant the fire engine's slope model was always inactive
+  // for real-terrain TIFFs.
+  // -------------------------------------------------------------------------
+  let grid: Grid;
+  if (isMultiBand && ndmiBand && landCoverBand && slopeBand && aspectBand) {
     grid = gridFromBands(
       ndviBand,
       ndmiBand,
       landCoverBand,
+      slopeBand,
+      aspectBand,
       width,
       height,
       gridW,
       gridH
     );
   } else {
+    // Legacy 2-band fallback: no slope/aspect data available.
     grid = gridFromImageData(ndviImageData, gridW, gridH);
   }
 
-  // Render the NDVI canvas to a blob URL for the 3D terrain texture.
+  // -------------------------------------------------------------------------
+  // Render NDVI canvas → blob URL for 3D terrain texture.
+  // -------------------------------------------------------------------------
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Could not get 2D canvas context");
   ctx.putImageData(ndviImageData, 0, 0);
+
   const ndviUrl: string = await new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (!blob) {

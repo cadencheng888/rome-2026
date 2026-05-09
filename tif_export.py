@@ -20,12 +20,12 @@ Authentication (first time only):
     earthengine authenticate
 
 Usage:
-    python burn_optimizer_export.py \\
+    python tif_export.py \\
         --project your-gcp-project \\
         --name "Los_Padres" \\
         --lat 34.8 \\
         --lon -119.8 \\
-        --side 50
+        --side 25
 """
 
 import ee
@@ -67,12 +67,13 @@ def export_burn_optimizer(
     name,
     lat,
     lon,
-    side_km=50,
+    side_km=25,           # was 50 in docstring but 25 in argparse — now consistent
     start_date="2024-06-01",
     end_date="2024-09-30",
     scale=30,
     output_dir="./outputs",
     cloud_threshold=10,
+    drive_folder="GEE_Exports",
     project=None,
 ):
     """
@@ -91,12 +92,13 @@ def export_burn_optimizer(
         name             (str):   Location name, used for output filename
         lat              (float): Latitude of center point
         lon              (float): Longitude of center point
-        side_km          (float): Side length in km of the square AOI
+        side_km          (float): Side length in km of the square AOI (default: 25)
         start_date       (str):   Start date for Sentinel-2 (YYYY-MM-DD)
         end_date         (str):   End date for Sentinel-2 (YYYY-MM-DD)
         scale            (int):   Pixel resolution in meters (10, 20, or 30)
         output_dir       (str):   Local directory to save the GeoTIFF
         cloud_threshold  (int):   Max cloud cover % for Sentinel-2 images
+        drive_folder     (str):   Google Drive folder for exported files
         project          (str):   Google Cloud project ID
 
     Returns:
@@ -145,8 +147,6 @@ def export_burn_optimizer(
     )
 
     # Band 4 — NDVI: (B8 - B4) / (B8 + B4)
-    # High = dense healthy vegetation (more fuel)
-    # Low  = sparse / stressed vegetation
     ndvi = (
         s2.normalizedDifference(["B8", "B4"])
         .toFloat()
@@ -155,8 +155,6 @@ def export_burn_optimizer(
     print("   ✓ NDVI  — fuel density  (Sentinel-2 B8/B4)")
 
     # Band 5 — NDMI: (B8 - B11) / (B8 + B11)
-    # High = moist vegetation (lower fire risk)
-    # Low  = dry vegetation  (higher fire risk / burn-ready)
     ndmi = (
         s2.normalizedDifference(["B8", "B11"])
         .toFloat()
@@ -165,8 +163,6 @@ def export_burn_optimizer(
     print("   ✓ NDMI  — fuel moisture (Sentinel-2 B8/B11)")
 
     # Band 6 — NBR: (B8 - B12) / (B8 + B12)
-    # Pre-burn baseline; subtract post-burn NBR to get dNBR (burn severity)
-    # Also identifies already-stressed / recently burned areas
     nbr = (
         s2.normalizedDifference(["B8", "B12"])
         .toFloat()
@@ -175,8 +171,6 @@ def export_burn_optimizer(
     print("   ✓ NBR   — pre-burn baseline (Sentinel-2 B8/B12)")
 
     # Band 7 — Land Cover (NLCD 2021)
-    # Differentiates fuel types: grass (71), shrub (52), forest (41/42/43), etc.
-    # See NLCD class reference at the top of this file.
     nlcd = (
         ee.ImageCollection("USGS/NLCD_RELEASES/2021_REL/NLCD")
         .first()
@@ -206,12 +200,12 @@ def export_burn_optimizer(
     safe_name = name.replace(" ", "_")
     task_description = f"{safe_name}"
 
-    print(f"\n⬆️  Submitting export task to Google Drive...")
+    print(f"\n⬆️  Submitting export task to Google Drive ({drive_folder})...")
 
     task = ee.batch.Export.image.toDrive(
         image=combined,
         description=task_description,
-        folder="GEE_Exports",
+        folder=drive_folder,
         fileNamePrefix=task_description,
         scale=scale,
         region=aoi,
@@ -232,7 +226,7 @@ def export_burn_optimizer(
 
         if state == "COMPLETED":
             print("✅ Export complete!")
-            print(f"   File: Google Drive → GEE_Exports/{task_description}.tif")
+            print(f"   File: Google Drive → {drive_folder}/{task_description}.tif")
             print(f"\n📦 Band reference:")
             print(f"   Band 1 — Elevation   (meters)")
             print(f"   Band 2 — Slope       (degrees)")
@@ -263,16 +257,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="Export 7-band controlled burn optimizer GeoTIFF from Google Earth Engine"
     )
-    parser.add_argument("--project",    required=True,             help="Google Cloud project ID")
-    parser.add_argument("--name",       required=True,             help="Location name (used in filename)")
-    parser.add_argument("--lat",        required=True, type=float, help="Latitude of center point")
-    parser.add_argument("--lon",        required=True, type=float, help="Longitude of center point")
-    parser.add_argument("--side",       default=25,    type=float, help="Side length of square AOI in km (default: 25)")
-    parser.add_argument("--start",      default="2024-06-01",      help="Start date YYYY-MM-DD (default: 2024-06-01)")
-    parser.add_argument("--end",        default="2024-09-30",      help="End date YYYY-MM-DD (default: 2024-09-30)")
-    parser.add_argument("--scale",      default=30,    type=int,   help="Resolution in meters (default: 30)")
-    parser.add_argument("--output-dir", default="./outputs",       help="Local output directory (default: ./outputs)")
-    parser.add_argument("--cloud",      default=10,    type=int,   help="Max cloud %% for Sentinel-2 (default: 10)")
+    parser.add_argument("--project",      required=True,             help="Google Cloud project ID")
+    parser.add_argument("--name",         required=True,             help="Location name (used in filename)")
+    parser.add_argument("--lat",          required=True, type=float, help="Latitude of center point")
+    parser.add_argument("--lon",          required=True, type=float, help="Longitude of center point")
+    parser.add_argument("--side",         default=25,    type=float, help="Side length of square AOI in km (default: 25)")
+    parser.add_argument("--start",        default="2024-06-01",      help="Start date YYYY-MM-DD (default: 2024-06-01)")
+    parser.add_argument("--end",          default="2024-09-30",      help="End date YYYY-MM-DD (default: 2024-09-30)")
+    parser.add_argument("--scale",        default=30,    type=int,   help="Resolution in meters (default: 30)")
+    parser.add_argument("--output-dir",   default="./outputs",       help="Local output directory (default: ./outputs)")
+    parser.add_argument("--cloud",        default=10,    type=int,   help="Max cloud %% for Sentinel-2 (default: 10)")
+    parser.add_argument("--drive-folder", default="GEE_Exports",     help="Google Drive destination folder (default: GEE_Exports)")
 
     args = parser.parse_args()
 
@@ -286,6 +281,7 @@ def main():
         scale=args.scale,
         output_dir=args.output_dir,
         cloud_threshold=args.cloud,
+        drive_folder=args.drive_folder,
         project=args.project,
     )
 
